@@ -23,6 +23,11 @@ enum Commands {
         /// Name of the skill to create
         name: String,
     },
+    /// Compile .skill sources to SKILL.md output files
+    Build {
+        /// Name of a single skill to compile (compiles all if omitted)
+        name: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -35,6 +40,10 @@ fn main() -> Result<()> {
         Commands::New { name } => {
             let cwd = std::env::current_dir()?;
             skillet::new::run(&cwd, &name)?;
+        }
+        Commands::Build { name } => {
+            let cwd = std::env::current_dir()?;
+            skillet::build::run(&cwd, name.as_deref())?;
         }
     }
     Ok(())
