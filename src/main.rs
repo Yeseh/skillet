@@ -28,6 +28,20 @@ enum Commands {
         /// Name of a single skill to compile (compiles all if omitted)
         name: Option<String>,
     },
+    /// Check skills for quality issues
+    Lint {
+        /// Name of a single skill to lint (lints all if omitted)
+        name: Option<String>,
+        /// Promote warnings to errors
+        #[arg(long)]
+        strict: bool,
+        /// Show info-level diagnostics
+        #[arg(long)]
+        pedantic: bool,
+        /// Output format: human (default) or json
+        #[arg(long, default_value = "human")]
+        format: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -44,6 +58,18 @@ fn main() -> Result<()> {
         Commands::Build { name } => {
             let cwd = std::env::current_dir()?;
             skillet::build::run(&cwd, name.as_deref())?;
+        }
+        Commands::Lint { name, strict, pedantic, format } => {
+            let cwd = std::env::current_dir()?;
+            let fmt = match format.as_str() {
+                "json" => skillet::lint::OutputFormat::Json,
+                _ => skillet::lint::OutputFormat::Human,
+            };
+            let opts = skillet::lint::LintOptions::new(strict, pedantic, fmt);
+            let clean = skillet::lint::run(&cwd, name.as_deref(), &opts)?;
+            if !clean {
+                std::process::exit(1);
+            }
         }
     }
     Ok(())

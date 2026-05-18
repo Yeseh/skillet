@@ -1,6 +1,7 @@
 //! Generation and persistence of `skillet.lock`.
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,7 +16,7 @@ pub struct LockMeta {
     /// Skillet version that produced this lockfile.
     pub skillet_version: String,
     /// RFC 3339 timestamp of the build.
-    pub built_at: String,
+    pub built_at: DateTime<Utc>,
     /// Tokenizer used for budget calculations.
     pub tokenizer: String,
 }
@@ -78,7 +79,7 @@ mod tests {
         let mut lf = Lockfile::default();
         lf.meta = Some(LockMeta {
             skillet_version: "0.1.0".into(),
-            built_at: "2026-01-01T00:00:00Z".into(),
+            built_at: "2026-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap(),
             tokenizer: "cl100k_base".into(),
         });
         lf.skills.insert(

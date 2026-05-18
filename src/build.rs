@@ -1,14 +1,22 @@
 //! Compilation pipeline: `.skill` sources → `SKILL.md` output files.
 
-use crate::config::SkilletConfig;
+use crate::config::{self, SkilletConfig};
 use crate::lockfile::{LockMeta, Lockfile, SkillEntry};
-use crate::new::load_config;
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use gray_matter::{engine::YAML, Matter};
 use regex::Regex;
+use serde::Deserialize;
 use sha2::Digest;
 use std::path::Path;
+use std::sync::LazyLock;
+
+static FRAGMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\{\{>\s*([\w-]+)\s*\}\}\s*$").unwrap());
+
+static REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap());
 
 /// Compiles `.skill` sources to `SKILL.md` files and updates `skillet.lock`.
 ///
@@ -20,7 +28,7 @@ use std::path::Path;
 /// Returns an error if any skill fails to compile (missing fragment, undefined
 /// var/env ref, missing file ref, or frontmatter name mismatch).
 pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
-    let config = load_config(workspace)?;
+    let config = config::load(workspace)?;
     let skills_dir = workspace.join(&config.workspace.skills_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
 
@@ -45,12 +53,12 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
     let mut lockfile = crate::lockfile::read(workspace)?;
     lockfile.meta = Some(LockMeta {
         skillet_version: env!("CARGO_PKG_VERSION").to_string(),
-        built_at: Utc::now().to_rfc3339(),
+        built_at: Utc::now(),
         tokenizer: config.build.tokenizer.clone(),
     });
 
     for source in &targets {
-        compile_skill(source, &config, workspace, &fragments_dir, &mut lockfile)?;
+        compile_skill(source, &config, &fragments_dir, &skills_dir, &mut lockfile)?;
         println!("built {}", source.name);
     }
 
@@ -58,13 +66,15 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn compile_skill(
+/// Compiles a skill source to a `String` without writing to disk or touching the lockfile.
+///
+/// Used by `skillet lint` to verify that `SKILL.md` is up to date.
+pub fn compile_to_string(
     source: &SkillSource,
     config: &SkilletConfig,
-    workspace: &Path,
     fragments_dir: &Path,
-    lockfile: &mut Lockfile,
-) -> Result<()> {
+    skills_dir: &Path,
+) -> Result<String> {
     let raw = std::fs::read_to_string(&source.source_path)
         .with_context(|| format!("failed to read {}", source.source_path.display()))?;
 
@@ -79,12 +89,25 @@ fn compile_skill(
         );
     }
 
-    let skills_dir = workspace.join(&config.workspace.skills_dir);
+    let (processed_body, _fragments_used) = process_fragments(&body, fragments_dir)?;
+    let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_dir)?;
+    Ok(format!("---\n{}\n---\n{}", frontmatter, compiled_body))
+}
 
-    let (processed_body, fragments_used) = process_fragments(&body, fragments_dir)?;
-    let compiled_body = process_refs(&processed_body, &source.skill_dir, config, &skills_dir)?;
-
-    let output = format!("---\n{}\n---\n{}", frontmatter, compiled_body);
+fn compile_skill(
+    source: &SkillSource,
+    config: &SkilletConfig,
+    fragments_dir: &Path,
+    skills_dir: &Path,
+    lockfile: &mut Lockfile,
+) -> Result<()> {
+    let output = compile_to_string(source, config, fragments_dir, skills_dir)?;
+    let (_, fragments_used) = {
+        // Re-parse to extract fragment list for lockfile (compile_to_string discards it)
+        let raw = std::fs::read_to_string(&source.source_path)?;
+        let (_fm, _name, body) = parse_source(&raw)?;
+        process_fragments(&body, fragments_dir)?
+    };
     let output_path = source.skill_dir.join("SKILL.md");
     std::fs::write(&output_path, &output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
@@ -107,55 +130,47 @@ fn compile_skill(
     Ok(())
 }
 
-/// Splits a `.skill` source into `(frontmatter_str, name, body)`.
-fn parse_source(source: &str) -> Result<(String, String, String)> {
-    // Strip UTF-8 BOM if present
-    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-
-    if !source.starts_with("---\n") {
-        bail!("source must begin with --- frontmatter delimiter");
-    }
-
-    let rest = &source[4..]; // skip opening "---\n"
-
-    let close_pos = rest
-        .find("\n---\n")
-        .ok_or_else(|| anyhow::anyhow!("frontmatter closing --- not found"))?;
-
-    let frontmatter = rest[..close_pos].to_string();
-    let body = rest[close_pos + 5..].to_string(); // skip "\n---\n"
-
-    let name = extract_name(&frontmatter)?;
-    Ok((frontmatter, name, body))
+/// Typed representation of a `.skill` file's YAML frontmatter.
+#[derive(Deserialize)]
+struct SkillFrontmatter {
+    /// Skill identifier — must match the containing directory name.
+    name: String,
 }
 
-/// Extracts the `name` field from a raw YAML frontmatter string.
-fn extract_name(frontmatter: &str) -> Result<String> {
-    let re = Regex::new(r#"(?m)^name:\s*["']?([^"'#\n]+?)["']?\s*$"#).unwrap();
-    re.captures(frontmatter)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("frontmatter missing 'name' field"))
+/// Parses a `.skill` source with `gray_matter`, returning
+/// `(frontmatter_str, name, body)`.
+///
+/// `frontmatter_str` is the raw YAML text between the `---` delimiters,
+/// preserved verbatim for pass-through into `SKILL.md`.
+fn parse_source(source: &str) -> Result<(String, String, String)> {
+    let matter = Matter::<YAML>::new();
+    let parsed = matter
+        .parse::<SkillFrontmatter>(source.strip_prefix('\u{feff}').unwrap_or(source))
+        .context("failed to parse skill source")?;
+
+    let fm = parsed
+        .data
+        .ok_or_else(|| anyhow::anyhow!("source has no YAML frontmatter"))?;
+
+    Ok((parsed.matter, fm.name, parsed.content))
 }
 
 /// Expands `{{> fragment-name }}` include directives in `body`.
 ///
 /// Returns the expanded body and the list of fragment names used.
 fn process_fragments(body: &str, fragments_dir: &Path) -> Result<(String, Vec<String>)> {
-    let re = Regex::new(r"^\{\{>\s*([\w-]+)\s*\}\}\s*$").unwrap();
     let mut fragments_used: Vec<String> = Vec::new();
 
-    // Use split('\n') so a trailing '\n' produces a final empty element,
+    // split('\n') so a trailing '\n' produces a final empty element,
     // allowing join('\n') to faithfully reconstruct the original.
     let lines: Vec<&str> = body.split('\n').collect();
     let mut out_lines: Vec<String> = Vec::with_capacity(lines.len());
 
     for &line in &lines {
-        if let Some(caps) = re.captures(line) {
+        if let Some(caps) = FRAGMENT_RE.captures(line) {
             let frag_name = &caps[1];
             let content = workspace::load_fragment(fragments_dir, frag_name)?;
-            if !fragments_used.contains(&frag_name.to_string()) {
+            if !fragments_used.iter().any(|f| f == frag_name) {
                 fragments_used.push(frag_name.to_string());
             }
             // Inline the fragment content, preserving its own line structure.
@@ -179,13 +194,12 @@ fn process_refs(
     config: &SkilletConfig,
     skills_dir: &Path,
 ) -> Result<String> {
-    let re = Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap();
     let mut result = String::with_capacity(body.len());
     let mut last_end = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    for caps in re.captures_iter(body) {
-        let m = caps.get(0).unwrap();
+    for caps in REF_RE.captures_iter(body) {
+        let m = caps.get(0).expect("captures_iter always yields a full match");
         result.push_str(&body[last_end..m.start()]);
         last_end = m.end();
 
@@ -232,7 +246,7 @@ fn process_refs(
                     result.push_str(&caps[0]);
                 }
             },
-            _ => result.push_str(&caps[0]),
+            _ => unreachable!("REF_RE only matches ref|cmd|skill|var|env"),
         }
     }
 
@@ -291,8 +305,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_source_errors_when_no_frontmatter_delimiter() {
-        // Arrange
+    fn parse_source_errors_when_frontmatter_missing() {
+        // Arrange — no --- delimiters at all
         let src = "# No frontmatter\n";
 
         // Act & Assert
@@ -300,9 +314,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_source_errors_when_frontmatter_not_closed() {
+    fn parse_source_errors_when_name_field_absent() {
         // Arrange
-        let src = "---\nname: foo\n";
+        let src = "---\ndescription: no name here\n---\n\n# body\n";
 
         // Act & Assert
         assert!(parse_source(src).is_err());

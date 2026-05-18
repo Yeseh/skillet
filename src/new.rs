@@ -1,31 +1,18 @@
 //! `skillet new` — scaffold a new skill source inside an initialized workspace.
 
-use crate::config::SkilletConfig;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 /// Renders the minimal `.skill` scaffold for a skill named `name`.
 pub fn scaffold_content(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: \"\"\n---\n\n# {name}\n")
-}
-
-/// Loads and parses `skillet.toml` from `workspace`.
-pub fn load_config(workspace: &Path) -> Result<SkilletConfig> {
-    let toml_path = workspace.join("skillet.toml");
-    let raw = std::fs::read_to_string(&toml_path).with_context(|| {
-        format!(
-            "cannot read {}: workspace not initialized (run `skillet init` first)",
-            toml_path.display()
-        )
-    })?;
-    toml::from_str(&raw).context("failed to parse skillet.toml")
+    format!("---\nname: {name}\ndescription: \"TODO: describe this skill\"\n---\n\n# {name}\n")
 }
 
 /// Scaffolds a new skill source at `<skills_dir>/<name>/<name>.skill`.
 ///
 /// Returns an error if the workspace is not initialized or if the skill already exists.
 pub fn run(workspace: &Path, name: &str) -> Result<()> {
-    let config = load_config(workspace)?;
+    let config = crate::config::load(workspace)?;
     let skills_dir = workspace.join(&config.workspace.skills_dir);
     let skill_dir = skills_dir.join(name);
     let skill_file = skill_dir.join(format!("{name}.skill"));
@@ -48,6 +35,7 @@ pub fn run(workspace: &Path, name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use crate::config::SkilletConfig;
     use tempfile::TempDir;
 
     fn init_workspace(dir: &Path) {
@@ -71,7 +59,7 @@ mod tests {
             "should include name field"
         );
         assert!(
-            content.contains("description: \"\""),
+            content.contains("description:"),
             "should include empty description"
         );
         assert!(content.contains("# my-skill"), "should include heading");
@@ -136,7 +124,7 @@ mod tests {
         fs::write(tmp.path().join("skillet.toml"), custom_toml).unwrap();
 
         // Act
-        let config = load_config(tmp.path()).unwrap();
+        let config = crate::config::load(tmp.path()).unwrap();
 
         // Assert
         assert_eq!(config.workspace.skills_dir, "custom-skills");

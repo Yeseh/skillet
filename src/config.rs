@@ -1,5 +1,6 @@
 //! Configuration types for `skillet.toml`.
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -115,6 +116,23 @@ impl SkilletConfig {
     }
 }
 
+/// Reads and parses `skillet.toml` from `workspace`.
+///
+/// # Errors
+///
+/// Returns an error if `skillet.toml` is missing (workspace not initialised)
+/// or if its contents cannot be parsed.
+pub fn load(workspace: &std::path::Path) -> anyhow::Result<SkilletConfig> {
+    let toml_path = workspace.join("skillet.toml");
+    let raw = std::fs::read_to_string(&toml_path).with_context(|| {
+        format!(
+            "cannot read {}: workspace not initialized (run `skillet init` first)",
+            toml_path.display()
+        )
+    })?;
+    toml::from_str(&raw).context("failed to parse skillet.toml")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +166,32 @@ mod tests {
         // Assert
         assert_eq!(cfg.build.tokenizer, "cl100k_base");
         assert!(!cfg.build.verify_urls);
+    }
+
+    #[test]
+    fn load_reads_skills_dir_from_custom_toml() {
+        // Arrange
+        let tmp = tempfile::TempDir::new().unwrap();
+        let custom_toml = "[workspace]\nskills_dir = 'custom-skills'\nfragments_dir = 'custom-skills/_fragments'\n\
+            [lint]\nmax_activation_tokens = 4000\nmax_discovery_tokens = 100\nmax_fragment_tokens = 500\nallowed_commands = []\ndisable = []\n\
+            [build]\ntokenizer = 'cl100k_base'\nverify_urls = false\n\
+            [vars]\n[env]\n";
+        std::fs::write(tmp.path().join("skillet.toml"), custom_toml).unwrap();
+
+        // Act
+        let config = super::load(tmp.path()).unwrap();
+
+        // Assert
+        assert_eq!(config.workspace.skills_dir, "custom-skills");
+    }
+
+    #[test]
+    fn load_errors_when_skillet_toml_missing() {
+        // Arrange
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Act & Assert
+        assert!(super::load(tmp.path()).is_err());
     }
 
     #[test]
