@@ -169,8 +169,14 @@ mod tests {
         let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
 
         // Assert
-        assert_eq!(parsed["workspace"]["skills_dir"].as_str().unwrap(), "skills");
-        assert_eq!(parsed["build"]["tokenizer"].as_str().unwrap(), "cl100k_base");
+        assert_eq!(
+            parsed["workspace"]["skills_dir"].as_str().unwrap(),
+            "skills"
+        );
+        assert_eq!(
+            parsed["build"]["tokenizer"].as_str().unwrap(),
+            "cl100k_base"
+        );
         assert_eq!(
             parsed["vars"]["project_name"].as_str().unwrap(),
             "my-project"

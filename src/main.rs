@@ -18,6 +18,11 @@ enum Commands {
         #[arg(long)]
         adopt: bool,
     },
+    /// Scaffold a new skill source in the current workspace
+    New {
+        /// Name of the skill to create
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -26,6 +31,10 @@ fn main() -> Result<()> {
         Commands::Init { adopt } => {
             let cwd = std::env::current_dir()?;
             skillet::init::run(&cwd, adopt)?;
+        }
+        Commands::New { name } => {
+            let cwd = std::env::current_dir()?;
+            skillet::new::run(&cwd, &name)?;
         }
     }
     Ok(())
