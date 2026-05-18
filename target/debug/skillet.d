@@ -1,1 +1,0 @@
-/home/jesse/repo/skillet/.worktrees/goal-implement-story-1-mpbieg7x-zoqj1l/target/debug/skillet: /home/jesse/repo/skillet/.worktrees/goal-implement-story-1-mpbieg7x-zoqj1l/src/config.rs /home/jesse/repo/skillet/.worktrees/goal-implement-story-1-mpbieg7x-zoqj1l/src/init.rs /home/jesse/repo/skillet/.worktrees/goal-implement-story-1-mpbieg7x-zoqj1l/src/main.rs

@@ -3,8 +3,8 @@
   "goal": "implement story 1",
   "launchedAt": "2026-05-18T18:00:06.873Z",
   "lifecycleStatus": "active",
-  "currentStage": "generator",
-  "summary": "Generating round 3/5",
+  "currentStage": "evaluator",
+  "summary": "Evaluating round 5/5",
   "workspace": {
     "rootCwd": "/home/jesse/repo/skillet",
     "worktreeName": "goal-implement-story-1-mpbieg7x-zoqj1l",
@@ -12,5 +12,5 @@
     "branchName": "goal/goal-implement-story-1-mpbieg7x-zoqj1l",
     "artifactDir": "/home/jesse/repo/skillet/.worktrees/goal-implement-story-1-mpbieg7x-zoqj1l/.pi/goal/goal-run-mpbieg7x-z07mph"
   },
-  "updatedAt": "2026-05-18T18:05:12.579Z"
+  "updatedAt": "2026-05-18T18:06:22.146Z"
 }
