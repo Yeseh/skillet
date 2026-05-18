@@ -541,7 +541,7 @@ fn extract_body(raw: &str) -> String {
 ///
 /// Returns a short type name (`"path"`, `"url"`, `"skill"`, `"command"`) or
 /// `None` if the content is not recognisable as a ref.
-fn classify_backtick<'a>(content: &str, all_sources: &[SkillSource]) -> Option<&'static str> {
+fn classify_backtick(content: &str, all_sources: &[SkillSource]) -> Option<&'static str> {
     if content.starts_with("http://") || content.starts_with("https://") {
         return Some("url");
     }
@@ -569,7 +569,7 @@ fn classify_backtick<'a>(content: &str, all_sources: &[SkillSource]) -> Option<&
 
 /// Approximates token count as `ceil(chars / 4)` (GPT tokenizer average for English).
 fn approx_tokens(text: &str) -> u32 {
-    ((text.len() + 3) / 4) as u32
+    text.len().div_ceil(4) as u32
 }
 
 fn is_on_path(cmd: &str) -> bool {
