@@ -53,8 +53,9 @@ pub struct CheckReport {
 pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
     // ── load config & discover sources ─────────────────────────────────────
     let config = config::load(workspace)?;
-    let skills_dir = workspace.join(&config.workspace.skills_dir);
-    let sources = workspace::discover_skills(&skills_dir)?;
+    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
+    let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
+    let sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
 
     // ── require a lockfile ─────────────────────────────────────────────────
     let lock_path = workspace.join("skillet.lock");
@@ -67,6 +68,9 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
         .with_context(|| format!("failed to read {}", lock_path.display()))?;
 
     // ── check each discovered skill ────────────────────────────────────────
+    let source_names: std::collections::HashSet<&str> =
+        sources.iter().map(|s| s.name.as_str()).collect();
+
     let mut results: Vec<SkillResult> = sources
         .iter()
         .map(|source| {
@@ -98,7 +102,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                     }
 
                     // Check on-disk SKILL.md against the recorded compiled hash.
-                    let skill_md = source.skill_dir.join("SKILL.md");
+                    let skill_md = source.skill_out_dir.join("SKILL.md");
                     if !skill_md.exists() {
                         reasons.push("SKILL.md is missing — run `skillet build`".to_string());
                     } else {
@@ -125,6 +129,22 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
             }
         })
         .collect();
+
+    // ── flag lockfile entries whose source directory no longer exists ─────────
+    // A skill removed from disk without rebuilding would otherwise appear fresh.
+    for locked_name in lockfile.skills.keys() {
+        if !source_names.contains(locked_name.as_str()) {
+            results.push(SkillResult {
+                name: locked_name.clone(),
+                fresh: false,
+                reasons: vec![format!(
+                    "skill '{}' is in lockfile but source directory no longer exists \
+                     — run `skillet build`",
+                    locked_name
+                )],
+            });
+        }
+    }
 
     // Stable alphabetical order regardless of discovery order.
     results.sort_by(|a, b| a.name.cmp(&b.name));
@@ -162,10 +182,10 @@ fn render_human(report: &CheckReport) {
 
     for skill in &stale {
         for reason in &skill.reasons {
-            eprintln!("✗ {}: {}", skill.name, reason);
+            println!("✗ {}: {}", skill.name, reason);
         }
     }
-    eprintln!(
+    println!(
         "\n{} skill{} stale",
         stale.len(),
         if stale.len() == 1 { " is" } else { "s are" }
@@ -196,12 +216,13 @@ mod tests {
     fn setup_built_workspace(tmp: &Path) {
         let cfg = SkilletConfig::default();
         fs::write(tmp.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
-        fs::create_dir_all(tmp.join("skills/_fragments")).unwrap();
+        fs::create_dir_all(tmp.join("src/skills/_fragments")).unwrap();
+        fs::create_dir_all(tmp.join("skills")).unwrap();
 
-        let skill_dir = tmp.join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill\n",
         )
         .unwrap();
@@ -230,7 +251,7 @@ mod tests {
         setup_built_workspace(tmp.path());
 
         // Modify the source after build
-        let skill_src = tmp.path().join("skills/my-skill/my-skill.skill");
+        let skill_src = tmp.path().join("src/skills/my-skill/my-skill.pan");
         fs::write(
             &skill_src,
             "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill (edited)\n",
@@ -308,16 +329,32 @@ mod tests {
     }
 
     #[test]
+    fn check_fails_when_skill_deleted_after_build() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        setup_built_workspace(tmp.path());
+
+        // Remove the skill directory without rebuilding
+        fs::remove_dir_all(tmp.path().join("skills/my-skill")).unwrap();
+
+        // Act
+        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+
+        // Assert — lockfile still references my-skill → stale
+        assert!(!ok);
+    }
+
+    #[test]
     fn check_fails_when_new_skill_added_after_build() {
         // Arrange
         let tmp = TempDir::new().unwrap();
         setup_built_workspace(tmp.path());
 
         // Add a second skill without rebuilding
-        let new_dir = tmp.path().join("skills/new-skill");
+        let new_dir = tmp.path().join("src/skills/new-skill");
         fs::create_dir_all(&new_dir).unwrap();
         fs::write(
-            new_dir.join("new-skill.skill"),
+            new_dir.join("new-skill.pan"),
             "---\nname: new-skill\ndescription: \"\"\n---\n\n# New\n",
         )
         .unwrap();

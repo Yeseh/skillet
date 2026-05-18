@@ -32,10 +32,10 @@ fn lint_exits_nonzero_on_errors() {
     let tmp = TempDir::new().unwrap();
     common::run_skillet(tmp.path(), &["init"]);
     // Create a skill with a wrong name in frontmatter — does not build
-    let skill_dir = tmp.path().join("skills/my-skill");
+    let skill_dir = tmp.path().join("src/skills/my-skill");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
-        skill_dir.join("my-skill.skill"),
+        skill_dir.join("my-skill.pan"),
         "---\nname: wrong-name\ndescription: x\n---\n\n# body\n",
     )
     .unwrap();
@@ -77,7 +77,7 @@ fn lint_stale_build_fires_after_source_edit() {
     common::run_skillet(tmp.path(), &["build"]);
 
     // Mutate the source after building
-    let source = tmp.path().join("skills/my-skill/my-skill.skill");
+    let source = tmp.path().join("src/skills/my-skill/my-skill.pan");
     let mut content = fs::read_to_string(&source).unwrap();
     content.push_str("\nExtra line added after build.\n");
     fs::write(&source, &content).unwrap();

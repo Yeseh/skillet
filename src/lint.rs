@@ -91,10 +91,11 @@ impl LintOptions {
 /// as `Err`.
 pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Result<bool> {
     let config = crate::config::load(workspace)?;
-    let skills_dir = workspace.join(&config.workspace.skills_dir);
+    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
+    let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
 
-    let all_sources = workspace::discover_skills(&skills_dir)?;
+    let all_sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
     let targets: Vec<&SkillSource> = match skill_name {
         Some(name) => all_sources.iter().filter(|s| s.name == name).collect(),
         None => all_sources.iter().collect(),
@@ -109,7 +110,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
             &all_sources,
             workspace,
             &fragments_dir,
-            &skills_dir,
+            &skills_src_dir,
         ));
     }
 
@@ -153,7 +154,7 @@ fn lint_skill(
     all_sources: &[SkillSource],
     _workspace: &Path,
     fragments_dir: &Path,
-    skills_dir: &Path,
+    skills_src_dir: &Path,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
 
@@ -171,9 +172,9 @@ fn lint_skill(
     };
 
     diags.extend(check_frontmatter(source, &raw));
-    diags.extend(check_refs(source, &raw, config, all_sources, skills_dir));
+    diags.extend(check_refs(source, &raw, config, all_sources, skills_src_dir));
     diags.extend(check_untyped_backticks(source, &raw, all_sources));
-    diags.extend(check_stale_build(source, config, fragments_dir, skills_dir));
+    diags.extend(check_stale_build(source, config, fragments_dir, skills_src_dir));
     diags.extend(check_oversized_skill(source, config));
     diags.extend(check_oversized_description(source, &raw, config));
 
@@ -265,7 +266,7 @@ fn check_refs(
     raw: &str,
     config: &SkilletConfig,
     all_sources: &[SkillSource],
-    skills_dir: &Path,
+    skills_src_dir: &Path,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
 
@@ -297,7 +298,7 @@ fn check_refs(
                 }
             }
             "skill" => {
-                if !all_sources.iter().any(|s| s.name == value) && !skills_dir.join(value).is_dir()
+                if !all_sources.iter().any(|s| s.name == value) && !skills_src_dir.join(value).is_dir()
                 {
                     diags.push(diag(
                         Severity::Error,
@@ -346,9 +347,9 @@ fn check_stale_build(
     source: &SkillSource,
     config: &SkilletConfig,
     fragments_dir: &Path,
-    skills_dir: &Path,
+    skills_src_dir: &Path,
 ) -> Vec<Diagnostic> {
-    let output_path = source.skill_dir.join("SKILL.md");
+    let output_path = source.skill_out_dir.join("SKILL.md");
 
     if !output_path.exists() {
         return vec![diag(
@@ -359,7 +360,7 @@ fn check_stale_build(
         )];
     }
 
-    let expected = match crate::build::compile_to_string(source, config, fragments_dir, skills_dir)
+    let expected = match crate::build::compile_to_string(source, config, fragments_dir, skills_src_dir)
     {
         Ok((s, _)) => s,
         Err(e) => {
@@ -392,7 +393,7 @@ fn check_stale_build(
 // ── Rule: oversized-skill ─────────────────────────────────────────────────────
 
 fn check_oversized_skill(source: &SkillSource, config: &SkilletConfig) -> Vec<Diagnostic> {
-    let output_path = source.skill_dir.join("SKILL.md");
+    let output_path = source.skill_out_dir.join("SKILL.md");
     let Ok(content) = std::fs::read_to_string(&output_path) else {
         return vec![];
     };
@@ -478,7 +479,7 @@ fn check_unused_fragments(all_sources: &[SkillSource], fragments_dir: &Path) -> 
         .flatten()
         .filter_map(|e| {
             let fname = e.file_name().into_string().ok()?;
-            let frag_name = fname.strip_suffix(".fragment.skill")?.to_string();
+            let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
             if used.contains(&frag_name) {
                 return None;
             }
@@ -507,7 +508,7 @@ fn check_oversized_fragments(config: &SkilletConfig, fragments_dir: &Path) -> Ve
         .filter_map(|e| {
             let path = e.path();
             let fname = path.file_name()?.to_string_lossy().into_owned();
-            let frag_name = fname.strip_suffix(".fragment.skill")?.to_string();
+            let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
             let content = std::fs::read_to_string(&path).ok()?;
             let tokens = approx_tokens(&content);
             if tokens > config.lint.max_fragment_tokens {
@@ -616,17 +617,19 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_source(dir: &Path, name: &str, content: &str) -> SkillSource {
-        let skill_dir = dir.join(name);
+        let skill_dir = dir.join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
-        let source_path = skill_dir.join(format!("{name}.skill"));
+        let source_path = skill_dir.join(format!("{name}.pan"));
         fs::write(&source_path, content).unwrap();
-        SkillSource { name: name.to_string(), source_path, skill_dir }
+        let skill_out_dir = dir.join("skills").join(name);
+        SkillSource { name: name.to_string(), source_path, skill_dir, skill_out_dir }
     }
 
     fn init_workspace(dir: &Path) {
         let cfg = SkilletConfig::default();
         fs::write(dir.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
-        fs::create_dir_all(dir.join(&cfg.workspace.skills_dir)).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.skills_src_dir)).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.skills_out_dir)).unwrap();
         fs::create_dir_all(dir.join(&cfg.workspace.fragments_dir)).unwrap();
     }
 
@@ -693,7 +696,7 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("skills"));
+        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("src/skills"));
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "stale-path-ref"));
@@ -712,7 +715,7 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("skills"));
+        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("src/skills"));
 
         // Assert
         assert!(diags.is_empty());
@@ -730,7 +733,7 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("skills"));
+        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("src/skills"));
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "stale-skill-ref"));
@@ -742,7 +745,7 @@ mod tests {
     fn check_unused_fragments_warns_on_unreferenced_fragment() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("unused.fragment.skill"), "# unused\n").unwrap();
+        fs::write(tmp.path().join("unused.fragment.pan"), "# unused\n").unwrap();
 
         // Act
         let diags = check_unused_fragments(&[], tmp.path());
@@ -755,15 +758,16 @@ mod tests {
     fn check_unused_fragments_silent_when_fragment_is_used() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("note.fragment.skill"), "# note\n").unwrap();
-        let skill_dir = tmp.path().join("diagnose");
+        fs::write(tmp.path().join("note.fragment.pan"), "# note\n").unwrap();
+        let skill_dir = tmp.path().join("src/skills/diagnose");
         fs::create_dir_all(&skill_dir).unwrap();
-        let source_path = skill_dir.join("diagnose.skill");
+        let source_path = skill_dir.join("diagnose.pan");
         fs::write(&source_path, "---\nname: diagnose\ndescription: x\n---\n\n{{> note }}\n").unwrap();
         let sources = vec![SkillSource {
             name: "diagnose".into(),
             source_path,
             skill_dir,
+            skill_out_dir: tmp.path().join("skills/diagnose"),
         }];
 
         // Act
@@ -780,10 +784,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/good");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/good");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("good.skill"),
+            skill_src_dir.join("good.pan"),
             "---\nname: good\ndescription: a good skill\n---\n\n# Good\n",
         )
         .unwrap();
@@ -802,10 +806,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/bad");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/bad");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("bad.skill"),
+            skill_src_dir.join("bad.pan"),
             "---\nname: wrong-name\ndescription: x\n---\n\n# Bad\n",
         )
         .unwrap();
@@ -822,14 +826,14 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         // stale-build fires as a warning... actually stale-build is an error.
         // Use a skill that won't fire errors but would have warnings via stale-build suppressed.
         // Instead, create a skill that is built so stale-build won't fire,
         // then verify strict mode upgrades any remaining warnings.
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
         )
         .unwrap();
@@ -852,19 +856,20 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         // Write a skillet.toml with stale-build disabled
-        let custom_toml = "[workspace]\nskills_dir = 'skills'\nfragments_dir = 'skills/_fragments'\n\
+        let custom_toml = "[workspace]\nskills_src_dir = 'src/skills'\nskills_out_dir = 'skills'\nfragments_dir = 'src/skills/_fragments'\n\
             [lint]\nmax_activation_tokens = 4000\nmax_discovery_tokens = 100\nmax_fragment_tokens = 500\n\
             allowed_commands = []\ndisable = ['stale-build', 'invalid-frontmatter']\n\
             [build]\ntokenizer = 'cl100k_base'\nverify_urls = false\n\
             [vars]\n[env]\n";
         fs::write(tmp.path().join("skillet.toml"), custom_toml).unwrap();
+        fs::create_dir_all(tmp.path().join("src/skills")).unwrap();
         fs::create_dir_all(tmp.path().join("skills")).unwrap();
-        fs::create_dir_all(tmp.path().join("skills/_fragments")).unwrap();
-        let skill_dir = tmp.path().join("skills/bad");
-        fs::create_dir_all(&skill_dir).unwrap();
+        fs::create_dir_all(tmp.path().join("src/skills/_fragments")).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/bad");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         // wrong name + no SKILL.md — would normally fire invalid-frontmatter + stale-build
         fs::write(
-            skill_dir.join("bad.skill"),
+            skill_src_dir.join("bad.pan"),
             "---\nname: wrong\ndescription: x\n---\n\n# body\n",
         )
         .unwrap();
@@ -881,10 +886,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
         )
         .unwrap();

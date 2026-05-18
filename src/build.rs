@@ -1,4 +1,4 @@
-//! Compilation pipeline: `.skill` sources → `SKILL.md` output files.
+//! Compilation pipeline: `.pan` sources → `SKILL.md` output files.
 
 use crate::config::{self, SkilletConfig};
 use crate::lockfile::{LockMeta, Lockfile, SkillEntry};
@@ -18,7 +18,7 @@ static FRAGMENT_RE: LazyLock<Regex> =
 static REF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap());
 
-/// Compiles `.skill` sources to `SKILL.md` files and updates `skillet.lock`.
+/// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 ///
 /// Compiles only the named skill when `skill_name` is `Some`, or all skills
 /// in the workspace when it is `None`.
@@ -29,10 +29,11 @@ static REF_RE: LazyLock<Regex> =
 /// var/env ref, missing file ref, or frontmatter name mismatch).
 pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
     let config = config::load(workspace)?;
-    let skills_dir = workspace.join(&config.workspace.skills_dir);
+    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
+    let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
 
-    let sources = workspace::discover_skills(&skills_dir)?;
+    let sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
 
     let targets: Vec<&SkillSource> = match skill_name {
         Some(name) => {
@@ -46,7 +47,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
     };
 
     if targets.is_empty() {
-        eprintln!("no skills found in {}", skills_dir.display());
+        eprintln!("no skills found in {}", skills_src_dir.display());
         return Ok(());
     }
 
@@ -58,7 +59,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
     });
 
     for source in &targets {
-        compile_skill(source, &config, &fragments_dir, &skills_dir, &mut lockfile)?;
+        compile_skill(source, &config, &fragments_dir, &skills_src_dir, &mut lockfile)?;
         println!("built {}", source.name);
     }
 
@@ -74,7 +75,7 @@ pub fn compile_to_string(
     source: &SkillSource,
     config: &SkilletConfig,
     fragments_dir: &Path,
-    skills_dir: &Path,
+    skills_src_dir: &Path,
 ) -> Result<(String, Vec<String>)> {
     let raw = std::fs::read_to_string(&source.source_path)
         .with_context(|| format!("failed to read {}", source.source_path.display()))?;
@@ -91,7 +92,7 @@ pub fn compile_to_string(
     }
 
     let (processed_body, fragments_used) = process_fragments(&body, fragments_dir)?;
-    let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_dir)?;
+    let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_src_dir)?;
     Ok((format!("---\n{}\n---\n{}", frontmatter, compiled_body), fragments_used))
 }
 
@@ -99,11 +100,13 @@ fn compile_skill(
     source: &SkillSource,
     config: &SkilletConfig,
     fragments_dir: &Path,
-    skills_dir: &Path,
+    skills_src_dir: &Path,
     lockfile: &mut Lockfile,
 ) -> Result<()> {
-    let (output, fragments_used) = compile_to_string(source, config, fragments_dir, skills_dir)?;
-    let output_path = source.skill_dir.join("SKILL.md");
+    let (output, fragments_used) = compile_to_string(source, config, fragments_dir, skills_src_dir)?;
+    std::fs::create_dir_all(&source.skill_out_dir)
+        .with_context(|| format!("failed to create output directory {}", source.skill_out_dir.display()))?;
+    let output_path = source.skill_out_dir.join("SKILL.md");
     std::fs::write(&output_path, &output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
 
@@ -125,14 +128,14 @@ fn compile_skill(
     Ok(())
 }
 
-/// Typed representation of a `.skill` file's YAML frontmatter.
+/// Typed representation of a `.pan` file's YAML frontmatter.
 #[derive(Deserialize)]
 struct SkillFrontmatter {
     /// Skill identifier — must match the containing directory name.
     name: String,
 }
 
-/// Parses a `.skill` source with `gray_matter`, returning
+/// Parses a `.pan` source with `gray_matter`, returning
 /// `(frontmatter_str, name, body)`.
 ///
 /// `frontmatter_str` is the raw YAML text between the `---` delimiters,
@@ -275,7 +278,8 @@ mod tests {
     fn init_workspace(dir: &Path) {
         let cfg = SkilletConfig::default();
         fs::write(dir.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
-        fs::create_dir_all(dir.join(&cfg.workspace.skills_dir)).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.skills_src_dir)).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.skills_out_dir)).unwrap();
         fs::create_dir_all(dir.join(&cfg.workspace.fragments_dir)).unwrap();
     }
 
@@ -320,7 +324,7 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         fs::write(
-            tmp.path().join("note.fragment.skill"),
+            tmp.path().join("note.fragment.pan"),
             "## Note\nsome content\n",
         )
         .unwrap();
@@ -467,10 +471,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill\n",
         )
         .unwrap();
@@ -479,7 +483,7 @@ mod tests {
         run(tmp.path(), Some("my-skill")).unwrap();
 
         // Assert
-        let skill_md = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        let skill_md = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
         assert!(skill_md.starts_with("---\n"));
         assert!(skill_md.contains("# My Skill"));
     }
@@ -489,10 +493,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill\n",
         )
         .unwrap();
@@ -511,10 +515,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let skill_dir = tmp.path().join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: wrong-name\ndescription: \"\"\n---\n\n# body\n",
         )
         .unwrap();
@@ -546,14 +550,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
         fs::write(
-            tmp.path().join("skills/_fragments/note.fragment.skill"),
+            tmp.path().join("src/skills/_fragments/note.fragment.pan"),
             "## Note\nfragment content\n",
         )
         .unwrap();
-        let skill_dir = tmp.path().join("skills/my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
         fs::write(
-            skill_dir.join("my-skill.skill"),
+            skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: \"\"\n---\n\n{{> note }}\n",
         )
         .unwrap();
@@ -562,7 +566,7 @@ mod tests {
         run(tmp.path(), Some("my-skill")).unwrap();
 
         // Assert
-        let output = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        let output = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
         assert!(output.contains("## Note"));
         assert!(output.contains("fragment content"));
         assert!(!output.contains("{{> note }}"));

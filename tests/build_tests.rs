@@ -70,12 +70,12 @@ fn build_expands_fragment_includes_in_output() {
     common::run_skillet(tmp.path(), &["init"]);
     common::run_skillet(tmp.path(), &["new", "my-skill"]);
     fs::write(
-        tmp.path().join("skills/_fragments/note.fragment.skill"),
+        tmp.path().join("src/skills/_fragments/note.fragment.pan"),
         "## Shared Note\nfragment content here\n",
     )
     .unwrap();
     // Append fragment include to the skill source
-    let source_path = tmp.path().join("skills/my-skill/my-skill.skill");
+    let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
     let mut source = fs::read_to_string(&source_path).unwrap();
     source.push_str("\n{{> note }}\n");
     fs::write(&source_path, &source).unwrap();

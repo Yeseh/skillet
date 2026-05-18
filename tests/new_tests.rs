@@ -21,7 +21,7 @@ fn new_creates_skill_directory_and_source_file_with_expected_frontmatter() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let skill_file = tmp.path().join("skills/my-skill/my-skill.skill");
+    let skill_file = tmp.path().join("src/skills/my-skill/my-skill.pan");
     assert!(skill_file.exists(), "skill file should exist");
     let content = fs::read_to_string(&skill_file).unwrap();
     assert!(content.contains("name: my-skill"), "should contain name");

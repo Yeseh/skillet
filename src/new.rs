@@ -8,14 +8,14 @@ pub fn scaffold_content(name: &str) -> String {
     format!("---\nname: {name}\ndescription: \"TODO: describe this skill\"\n---\n\n# {name}\n")
 }
 
-/// Scaffolds a new skill source at `<skills_dir>/<name>/<name>.skill`.
+/// Scaffolds a new skill source at `<skills_src_dir>/<name>/<name>.pan`.
 ///
 /// Returns an error if the workspace is not initialized or if the skill already exists.
 pub fn run(workspace: &Path, name: &str) -> Result<()> {
     let config = crate::config::load(workspace)?;
-    let skills_dir = workspace.join(&config.workspace.skills_dir);
-    let skill_dir = skills_dir.join(name);
-    let skill_file = skill_dir.join(format!("{name}.skill"));
+    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
+    let skill_dir = skills_src_dir.join(name);
+    let skill_file = skill_dir.join(format!("{name}.pan"));
 
     if skill_dir.exists() {
         bail!("skill '{name}' already exists at {}", skill_dir.display());
@@ -41,7 +41,8 @@ mod tests {
     fn init_workspace(dir: &Path) {
         let config = SkilletConfig::default();
         fs::write(dir.join("skillet.toml"), config.to_toml().unwrap()).unwrap();
-        fs::create_dir_all(dir.join(&config.workspace.skills_dir)).unwrap();
+        fs::create_dir_all(dir.join(&config.workspace.skills_src_dir)).unwrap();
+        fs::create_dir_all(dir.join(&config.workspace.skills_out_dir)).unwrap();
         fs::create_dir_all(dir.join(&config.workspace.fragments_dir)).unwrap();
     }
 
@@ -75,7 +76,7 @@ mod tests {
         run(tmp.path(), "my-skill").unwrap();
 
         // Assert
-        let skill_file = tmp.path().join("skills/my-skill/my-skill.skill");
+        let skill_file = tmp.path().join("src/skills/my-skill/my-skill.pan");
         assert!(skill_file.exists(), "skill file should be created");
         let content = fs::read_to_string(&skill_file).unwrap();
         assert!(content.contains("name: my-skill"));
@@ -114,10 +115,10 @@ mod tests {
     }
 
     #[test]
-    fn load_config_uses_workspace_skills_dir_from_toml() {
+    fn load_config_uses_workspace_skills_src_dir_from_toml() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        let custom_toml = "[workspace]\nskills_dir = 'custom-skills'\nfragments_dir = 'custom-skills/_fragments'\n\
+        let custom_toml = "[workspace]\nskills_src_dir = 'custom-src/skills'\nskills_out_dir = 'custom-skills'\nfragments_dir = 'custom-src/skills/_fragments'\n\
             [lint]\nmax_activation_tokens = 4000\nmax_discovery_tokens = 100\nmax_fragment_tokens = 500\nallowed_commands = []\ndisable = []\n\
             [build]\ntokenizer = 'cl100k_base'\nverify_urls = false\n\
             [vars]\n[env]\n";
@@ -127,6 +128,6 @@ mod tests {
         let config = crate::config::load(tmp.path()).unwrap();
 
         // Assert
-        assert_eq!(config.workspace.skills_dir, "custom-skills");
+        assert_eq!(config.workspace.skills_src_dir, "custom-src/skills");
     }
 }

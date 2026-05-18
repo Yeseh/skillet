@@ -69,10 +69,11 @@ pub enum OutputFormat {
 /// Returns an error if the workspace cannot be read.
 pub fn run(workspace: &Path, skill_name: Option<&str>, format: OutputFormat) -> Result<()> {
     let config = config::load(workspace)?;
-    let skills_dir = workspace.join(&config.workspace.skills_dir);
+    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
+    let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
 
-    let all_sources = workspace::discover_skills(&skills_dir)?;
+    let all_sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
     let lockfile = lockfile::read(workspace)?;
 
     let targets: Vec<_> = match skill_name {
@@ -101,7 +102,7 @@ fn compute_row(
     fragments_dir: &Path,
     lockfile: &lockfile::Lockfile,
 ) -> Result<BudgetRow> {
-    let skill_md_path = source.skill_dir.join("SKILL.md");
+    let skill_md_path = source.skill_out_dir.join("SKILL.md");
     let compiled = std::fs::read_to_string(&skill_md_path)
         .with_context(|| {
             format!(
@@ -155,7 +156,7 @@ fn compute_row(
 
     let mut fragments = Vec::with_capacity(frag_names.len());
     for frag_name in frag_names {
-        let frag_path = fragments_dir.join(format!("{}.fragment.skill", frag_name));
+        let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
         let tokens = if let Ok(text) = std::fs::read_to_string(&frag_path) {
             approx_tokens(&text)
         } else {
@@ -288,20 +289,22 @@ mod tests {
     }
 
     fn make_skill(dir: &std::path::Path, name: &str, description: &str, body: &str) {
-        let skill_dir = dir.join("skills").join(name);
+        let skill_dir = dir.join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
         let source = format!(
             "---\nname: {name}\ndescription: \"{description}\"\n---\n\n{body}",
         );
-        fs::write(skill_dir.join(format!("{name}.skill")), source).unwrap();
+        fs::write(skill_dir.join(format!("{name}.pan")), source).unwrap();
     }
 
     fn built_source(dir: &std::path::Path, name: &str) -> SkillSource {
-        let skill_dir = dir.join("skills").join(name);
+        let skill_dir = dir.join("src/skills").join(name);
+        let skill_out_dir = dir.join("skills").join(name);
         SkillSource {
             name: name.to_string(),
             skill_dir: skill_dir.clone(),
-            source_path: skill_dir.join(format!("{name}.skill")),
+            skill_out_dir,
+            source_path: skill_dir.join(format!("{name}.pan")),
         }
     }
 
@@ -320,7 +323,7 @@ mod tests {
         let source = built_source(tmp.path(), "alpha");
         let row = compute_row(
             &source,
-            &tmp.path().join("skills/_fragments"),
+            &tmp.path().join("src/skills/_fragments"),
             &lockfile,
         )
         .unwrap();
@@ -349,7 +352,7 @@ mod tests {
         let source = built_source(tmp.path(), "beta");
         let row = compute_row(
             &source,
-            &tmp.path().join("skills/_fragments"),
+            &tmp.path().join("src/skills/_fragments"),
             &lockfile,
         )
         .unwrap();
@@ -368,10 +371,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        let frags_dir = tmp.path().join("skills/_fragments");
+        let frags_dir = tmp.path().join("src/skills/_fragments");
         fs::create_dir_all(&frags_dir).unwrap();
         fs::write(
-            frags_dir.join("note.fragment.skill"),
+            frags_dir.join("note.fragment.pan"),
             "## Note\nfragment body\n",
         )
         .unwrap();
@@ -402,7 +405,7 @@ mod tests {
         let source = built_source(tmp.path(), "delta");
         let row = compute_row(
             &source,
-            &tmp.path().join("skills/_fragments"),
+            &tmp.path().join("src/skills/_fragments"),
             &lockfile,
         )
         .unwrap();
@@ -427,7 +430,7 @@ mod tests {
         let source = built_source(tmp.path(), "epsilon");
         let result = compute_row(
             &source,
-            &tmp.path().join("skills/_fragments"),
+            &tmp.path().join("src/skills/_fragments"),
             &lockfile,
         );
 

@@ -10,24 +10,27 @@ use walkdir::WalkDir;
 pub struct SkillSource {
     /// The skill's directory name, used as its identifier.
     pub name: String,
-    /// Absolute path to the `<name>.skill` source file.
+    /// Absolute path to the `<name>.pan` source file.
     pub source_path: PathBuf,
-    /// Absolute path to the skill's directory.
+    /// Absolute path to the skill's source directory (under `skills_src_dir`).
     pub skill_dir: PathBuf,
+    /// Absolute path to the skill's output directory (under `skills_out_dir`).
+    pub skill_out_dir: PathBuf,
 }
 
-/// Discovers all skill sources in `skills_dir`.
+/// Discovers all skill sources in `skills_src_dir`.
 ///
 /// Scans one level deep, skipping directories whose names start with `_` or `.`.
+/// The corresponding output directory for each skill is derived from `skills_out_dir`.
 /// Returns entries sorted by name.
-pub fn discover_skills(skills_dir: &Path) -> Result<Vec<SkillSource>> {
+pub fn discover_skills(skills_src_dir: &Path, skills_out_dir: &Path) -> Result<Vec<SkillSource>> {
     let mut skills = Vec::new();
 
-    if !skills_dir.exists() {
+    if !skills_src_dir.exists() {
         return Ok(skills);
     }
 
-    for entry in WalkDir::new(skills_dir)
+    for entry in WalkDir::new(skills_src_dir)
         .min_depth(1)
         .max_depth(1)
         .into_iter()
@@ -41,12 +44,13 @@ pub fn discover_skills(skills_dir: &Path) -> Result<Vec<SkillSource>> {
             Some(n) if !n.starts_with('_') && !n.starts_with('.') => n.to_string(),
             _ => continue,
         };
-        let source_path = skill_dir.join(format!("{}.skill", dir_name));
+        let source_path = skill_dir.join(format!("{}.pan", dir_name));
         if source_path.exists() {
             skills.push(SkillSource {
-                name: dir_name,
+                name: dir_name.clone(),
                 source_path,
                 skill_dir: skill_dir.to_path_buf(),
+                skill_out_dir: skills_out_dir.join(&dir_name),
             });
         }
     }
@@ -57,9 +61,9 @@ pub fn discover_skills(skills_dir: &Path) -> Result<Vec<SkillSource>> {
 
 /// Loads a fragment by name from `fragments_dir`.
 ///
-/// Expects a file named `{name}.fragment.skill`.
+/// Expects a file named `{name}.fragment.pan`.
 pub fn load_fragment(fragments_dir: &Path, name: &str) -> Result<String> {
-    let path = fragments_dir.join(format!("{}.fragment.skill", name));
+    let path = fragments_dir.join(format!("{}.fragment.pan", name));
     std::fs::read_to_string(&path).with_context(|| {
         format!(
             "fragment '{}' not found (expected at {})",
@@ -87,28 +91,33 @@ mod tests {
     fn discover_skills_finds_skill_source_in_subdir() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("diagnose");
+        let src_dir = tmp.path().join("src/skills");
+        let out_dir = tmp.path().join("skills");
+        let dir = src_dir.join("diagnose");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("diagnose.skill"), "---\nname: diagnose\n---\n").unwrap();
+        fs::write(dir.join("diagnose.pan"), "---\nname: diagnose\n---\n").unwrap();
 
         // Act
-        let skills = discover_skills(tmp.path()).unwrap();
+        let skills = discover_skills(&src_dir, &out_dir).unwrap();
 
         // Assert
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "diagnose");
+        assert_eq!(skills[0].skill_out_dir, out_dir.join("diagnose"));
     }
 
     #[test]
     fn discover_skills_skips_underscore_dirs() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        let frags = tmp.path().join("_fragments");
+        let src_dir = tmp.path().join("src/skills");
+        let out_dir = tmp.path().join("skills");
+        let frags = src_dir.join("_fragments");
         fs::create_dir_all(&frags).unwrap();
-        fs::write(frags.join("_fragments.skill"), "").unwrap();
+        fs::write(frags.join("_fragments.pan"), "").unwrap();
 
         // Act
-        let skills = discover_skills(tmp.path()).unwrap();
+        let skills = discover_skills(&src_dir, &out_dir).unwrap();
 
         // Assert
         assert!(skills.is_empty());
@@ -118,17 +127,18 @@ mod tests {
     fn discover_skills_returns_empty_when_dir_missing() {
         // Arrange & Act
         let tmp = TempDir::new().unwrap();
-        let skills = discover_skills(&tmp.path().join("nonexistent")).unwrap();
+        let out_dir = tmp.path().join("skills");
+        let skills = discover_skills(&tmp.path().join("nonexistent"), &out_dir).unwrap();
 
         // Assert
         assert!(skills.is_empty());
     }
 
     #[test]
-    fn load_fragment_reads_dot_fragment_skill_file() {
+    fn load_fragment_reads_dot_fragment_pan_file() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("check-adrs.fragment.skill"), "## Check ADRs\n").unwrap();
+        fs::write(tmp.path().join("check-adrs.fragment.pan"), "## Check ADRs\n").unwrap();
 
         // Act
         let content = load_fragment(tmp.path(), "check-adrs").unwrap();

@@ -6,10 +6,10 @@ use walkdir::WalkDir;
 
 /// Initialises a new skillet workspace at `workspace`.
 ///
-/// Creates the `skills/` and `skills/_fragments/` directories and writes a
-/// default `skillet.toml`.  If `adopt` is `true`, any `SKILL.md` files found
-/// directly inside `skills/<name>/` subdirectories are copied alongside their
-/// parent directory as `<name>.skill` source files.
+/// Creates the `src/skills/`, `src/skills/_fragments/`, and `skills/` directories
+/// and writes a default `skillet.toml`.  If `adopt` is `true`, any `SKILL.md` files
+/// found directly inside `skills/<name>/` subdirectories are copied into
+/// `src/skills/<name>/` as `<name>.pan` source files.
 ///
 /// # Errors
 ///
@@ -27,14 +27,16 @@ pub fn run(workspace: &Path, adopt: bool) -> Result<()> {
 
     let default_cfg = crate::config::SkilletConfig::default().to_toml()?;
 
-    let skills_dir = workspace.join("skills");
-    let fragments_dir = workspace.join("skills/_fragments");
+    let skills_src_dir = workspace.join("src/skills");
+    let skills_out_dir = workspace.join("skills");
+    let fragments_dir = workspace.join("src/skills/_fragments");
 
     if adopt {
-        adopt_skills(&skills_dir).context("failed to adopt SKILL.md files")?;
+        adopt_skills(&skills_out_dir, &skills_src_dir).context("failed to adopt SKILL.md files")?;
     }
 
-    std::fs::create_dir_all(&skills_dir).context("failed to create skills dir")?;
+    std::fs::create_dir_all(&skills_src_dir).context("failed to create skills source dir")?;
+    std::fs::create_dir_all(&skills_out_dir).context("failed to create skills output dir")?;
     std::fs::create_dir_all(&fragments_dir).context("failed to create fragments dir")?;
 
     std::fs::write(&config_path, &default_cfg).context("failed to write skillet.toml")?;
@@ -42,12 +44,12 @@ pub fn run(workspace: &Path, adopt: bool) -> Result<()> {
     Ok(())
 }
 
-fn adopt_skills(skills_dir: &Path) -> Result<()> {
-    if !skills_dir.exists() {
+fn adopt_skills(skills_out_dir: &Path, skills_src_dir: &Path) -> Result<()> {
+    if !skills_out_dir.exists() {
         return Ok(());
     }
 
-    for entry in WalkDir::new(skills_dir)
+    for entry in WalkDir::new(skills_out_dir)
         .min_depth(2)
         .max_depth(2)
         .into_iter()
@@ -65,7 +67,10 @@ fn adopt_skills(skills_dir: &Path) -> Result<()> {
             Some(n) => n.to_string(),
             None => continue,
         };
-        let dest = parent.join(format!("{}.skill", dir_name));
+        let dest_dir = skills_src_dir.join(&dir_name);
+        std::fs::create_dir_all(&dest_dir)
+            .with_context(|| format!("failed to create {}", dest_dir.display()))?;
+        let dest = dest_dir.join(format!("{}.pan", dir_name));
         std::fs::copy(path, &dest)
             .with_context(|| format!("failed to copy {} to {}", path.display(), dest.display()))?;
     }
@@ -79,21 +84,23 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn adopt_skills_copies_skill_md_as_named_dot_skill_file() {
+    fn adopt_skills_copies_skill_md_as_named_dot_pan_file() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        let skill_dir = tmp.path().join("diagnose");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "# Diagnose").unwrap();
+        let skill_out_dir = tmp.path().join("diagnose");
+        fs::create_dir_all(&skill_out_dir).unwrap();
+        fs::write(skill_out_dir.join("SKILL.md"), "# Diagnose").unwrap();
+        let skills_src = tmp.path().join("src/skills");
 
         // Act
-        adopt_skills(tmp.path()).unwrap();
+        adopt_skills(tmp.path(), &skills_src).unwrap();
 
         // Assert
-        assert!(skill_dir.join("diagnose.skill").exists());
+        let pan_file = skills_src.join("diagnose/diagnose.pan");
+        assert!(pan_file.exists());
         assert_eq!(
-            fs::read(skill_dir.join("SKILL.md")).unwrap(),
-            fs::read(skill_dir.join("diagnose.skill")).unwrap(),
+            fs::read(skill_out_dir.join("SKILL.md")).unwrap(),
+            fs::read(&pan_file).unwrap(),
         );
     }
 
@@ -101,15 +108,16 @@ mod tests {
     fn adopt_skills_preserves_original_skill_md() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        let skill_dir = tmp.path().join("my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "# My Skill").unwrap();
+        let skill_out_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_out_dir).unwrap();
+        fs::write(skill_out_dir.join("SKILL.md"), "# My Skill").unwrap();
+        let skills_src = tmp.path().join("src/skills");
 
         // Act
-        adopt_skills(tmp.path()).unwrap();
+        adopt_skills(tmp.path(), &skills_src).unwrap();
 
         // Assert — original is not removed
-        assert!(skill_dir.join("SKILL.md").exists());
+        assert!(skill_out_dir.join("SKILL.md").exists());
     }
 
     #[test]
@@ -117,13 +125,14 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("nonexistent");
+        let skills_src = tmp.path().join("src/skills");
 
         // Act & Assert — should not error
-        assert!(adopt_skills(&nonexistent).is_ok());
+        assert!(adopt_skills(&nonexistent, &skills_src).is_ok());
     }
 
     #[test]
-    fn run_creates_skills_dir_fragments_dir_and_config() {
+    fn run_creates_skills_dirs_and_config() {
         // Arrange
         let tmp = TempDir::new().unwrap();
 
@@ -131,8 +140,9 @@ mod tests {
         run(tmp.path(), false).unwrap();
 
         // Assert
+        assert!(tmp.path().join("src/skills").is_dir());
+        assert!(tmp.path().join("src/skills/_fragments").is_dir());
         assert!(tmp.path().join("skills").is_dir());
-        assert!(tmp.path().join("skills/_fragments").is_dir());
         assert!(tmp.path().join("skillet.toml").is_file());
     }
 

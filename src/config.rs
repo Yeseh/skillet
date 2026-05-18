@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// Path (relative to the project root) where skill definitions are stored.
-    pub skills_dir: String,
-    /// Path where skill fragments are stored.
+    /// Path (relative to the project root) where skill source `.pan` files are stored.
+    pub skills_src_dir: String,
+    /// Path (relative to the project root) where compiled `SKILL.md` outputs are written.
+    pub skills_out_dir: String,
+    /// Path where skill fragment `.fragment.pan` files are stored.
     pub fragments_dir: String,
 }
 
@@ -85,8 +87,9 @@ impl Default for SkilletConfig {
 
         SkilletConfig {
             workspace: WorkspaceConfig {
-                skills_dir: "skills".to_string(),
-                fragments_dir: "skills/_fragments".to_string(),
+                skills_src_dir: "src/skills".to_string(),
+                skills_out_dir: "skills".to_string(),
+                fragments_dir: "src/skills/_fragments".to_string(),
             },
             lint: LintConfig {
                 max_activation_tokens: 4000,
@@ -143,8 +146,9 @@ mod tests {
         let cfg = SkilletConfig::default();
 
         // Assert
-        assert_eq!(cfg.workspace.skills_dir, "skills");
-        assert_eq!(cfg.workspace.fragments_dir, "skills/_fragments");
+        assert_eq!(cfg.workspace.skills_src_dir, "src/skills");
+        assert_eq!(cfg.workspace.skills_out_dir, "skills");
+        assert_eq!(cfg.workspace.fragments_dir, "src/skills/_fragments");
     }
 
     #[test]
@@ -172,7 +176,7 @@ mod tests {
     fn load_reads_skills_dir_from_custom_toml() {
         // Arrange
         let tmp = tempfile::TempDir::new().unwrap();
-        let custom_toml = "[workspace]\nskills_dir = 'custom-skills'\nfragments_dir = 'custom-skills/_fragments'\n\
+        let custom_toml = "[workspace]\nskills_src_dir = 'custom-src/skills'\nskills_out_dir = 'custom-skills'\nfragments_dir = 'custom-src/skills/_fragments'\n\
             [lint]\nmax_activation_tokens = 4000\nmax_discovery_tokens = 100\nmax_fragment_tokens = 500\nallowed_commands = []\ndisable = []\n\
             [build]\ntokenizer = 'cl100k_base'\nverify_urls = false\n\
             [vars]\n[env]\n";
@@ -182,7 +186,8 @@ mod tests {
         let config = super::load(tmp.path()).unwrap();
 
         // Assert
-        assert_eq!(config.workspace.skills_dir, "custom-skills");
+        assert_eq!(config.workspace.skills_src_dir, "custom-src/skills");
+        assert_eq!(config.workspace.skills_out_dir, "custom-skills");
     }
 
     #[test]
@@ -214,7 +219,11 @@ mod tests {
 
         // Assert
         assert_eq!(
-            parsed["workspace"]["skills_dir"].as_str().unwrap(),
+            parsed["workspace"]["skills_src_dir"].as_str().unwrap(),
+            "src/skills"
+        );
+        assert_eq!(
+            parsed["workspace"]["skills_out_dir"].as_str().unwrap(),
             "skills"
         );
         assert_eq!(
