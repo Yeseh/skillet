@@ -2,6 +2,7 @@
 
 use crate::config::{self, SkilletConfig};
 use crate::lockfile::{FragmentLockEntry, LockMeta, Lockfile, SkillEntry};
+use crate::refs::TYPED_REF_RE;
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -14,9 +15,6 @@ use std::sync::LazyLock;
 
 static FRAGMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\{\{>\s*([\w-]+)\s*\}\}\s*$").unwrap());
-
-static REF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap());
 
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 ///
@@ -112,11 +110,8 @@ fn compile_skill(
     std::fs::write(&output_path, &output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
 
-    let source_hash = hash_file(&source.source_path)?;
-    let compiled_hash = format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(output.as_bytes()))
-    );
+    let source_hash = workspace::hash_file(&source.source_path)?;
+    let compiled_hash = hash_bytes(output.as_bytes());
 
     lockfile.skills.insert(
         source.name.clone(),
@@ -209,7 +204,7 @@ fn process_refs(
     let mut last_end = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    for caps in REF_RE.captures_iter(body) {
+    for caps in TYPED_REF_RE.captures_iter(body) {
         let m = caps.get(0).expect("captures_iter always yields a full match");
         result.push_str(&body[last_end..m.start()]);
         last_end = m.end();
@@ -261,7 +256,7 @@ fn process_refs(
                     result.push_str(&caps[0]);
                 }
             },
-            _ => unreachable!("REF_RE only matches ref|cmd|skill|var|env"),
+            _ => unreachable!("TYPED_REF_RE only matches ref|cmd|skill|var|env"),
         }
     }
 
@@ -297,7 +292,7 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Re
     // Hash each fragment file and sort used_by for deterministic output.
     for (frag_name, frag_entry) in &mut lockfile.fragments {
         let path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        if let Ok(h) = hash_file(&path) {
+        if let Ok(h) = workspace::hash_file(&path) {
             frag_entry.hash = h;
         }
         frag_entry.used_by.sort();
@@ -306,11 +301,9 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Re
     Ok(())
 }
 
-/// Returns `"sha256:<hex>"` of the file at `path`.
-fn hash_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("failed to read {} for hashing", path.display()))?;
-    Ok(format!("sha256:{}", hex::encode(sha2::Sha256::digest(&bytes))))
+/// Returns `"sha256:<hex>"` of `bytes` (in-memory hashing for compiled output).
+fn hash_bytes(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

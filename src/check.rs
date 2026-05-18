@@ -8,7 +8,6 @@ use crate::config;
 use crate::workspace;
 use anyhow::{Context, Result};
 use serde::Serialize;
-use sha2::Digest;
 use std::path::Path;
 
 /// How results are rendered.
@@ -86,7 +85,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                 }
                 Some(entry) => {
                     // Fast path: compare source hash.
-                    match hash_file(&source.source_path) {
+                    match workspace::hash_file(&source.source_path) {
                         Err(e) => reasons.push(format!("could not hash source: {}", e)),
                         Ok(current_source_hash) => {
                             if current_source_hash != entry.source_hash {
@@ -107,7 +106,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                     if !skill_md.exists() {
                         reasons.push("SKILL.md is missing — run `skillet build`".to_string());
                     } else {
-                        match hash_file(&skill_md) {
+                        match workspace::hash_file(&skill_md) {
                             Err(e) => reasons.push(format!("could not hash SKILL.md: {}", e)),
                             Ok(current_compiled_hash) => {
                                 if current_compiled_hash != entry.compiled_hash {
@@ -136,7 +135,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
     // include it as stale.  This runs even when there are no skills in `results`.
     for (frag_name, frag_entry) in &lockfile.fragments {
         let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        let reason = match hash_file(&frag_path) {
+        let reason = match workspace::hash_file(&frag_path) {
             Err(_) => Some(format!(
                 "fragment '{frag_name}' is missing — run `skillet build`"
             )),
@@ -219,14 +218,7 @@ fn render_human(report: &CheckReport) {
 
 // ── hashing ──────────────────────────────────────────────────────────────────
 
-fn hash_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("failed to read {} for hashing", path.display()))?;
-    Ok(format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(&bytes))
-    ))
-}
+// File hashing delegated to workspace::hash_file.
 
 // ── tests ────────────────────────────────────────────────────────────────────
 

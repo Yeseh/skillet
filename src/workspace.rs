@@ -1,6 +1,7 @@
 //! Skill and fragment discovery within a skillet workspace.
 
 use anyhow::{Context, Result};
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -71,6 +72,13 @@ pub fn load_fragment(fragments_dir: &Path, name: &str) -> Result<String> {
             path.display()
         )
     })
+}
+
+/// Returns `"sha256:<hex>"` of the file at `path`.
+pub(crate) fn hash_file(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read {} for hashing", path.display()))?;
+    Ok(format!("sha256:{}", hex::encode(sha2::Sha256::digest(&bytes))))
 }
 
 /// Returns `true` if `cmd` is found as a file in any directory on `PATH`.

@@ -2,24 +2,12 @@
 
 use crate::config;
 use crate::lockfile;
+use crate::parse::parse_frontmatter;
 use crate::tokens::approx_tokens;
 use crate::workspace;
 use anyhow::{Context, Result};
-use gray_matter::{engine::YAML, Matter};
-use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::Path;
-use std::sync::LazyLock;
-
-static REF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`ref::([^`]+)`").unwrap());
-
-/// Typed frontmatter for discovery-token extraction.
-#[derive(Deserialize)]
-struct SkillFm {
-    name: Option<String>,
-    description: Option<String>,
-}
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -112,20 +100,13 @@ fn compute_row(
         })?;
 
     // ── Discovery: name + description from frontmatter ────────────────────────
-    let matter = Matter::<YAML>::new();
-    let discovery_text = match matter.parse::<SkillFm>(&compiled) {
-        Ok(parsed) => {
-            let fm = parsed.data.unwrap_or(SkillFm {
-                name: None,
-                description: None,
-            });
-            format!(
-                "{} {}",
-                fm.name.unwrap_or_default(),
-                fm.description.unwrap_or_default()
-            )
-        }
-        Err(_) => String::new(),
+    let discovery_text = match parse_frontmatter(&compiled) {
+        Ok(Some(fm)) => format!(
+            "{} {}",
+            fm.name.unwrap_or_default(),
+            fm.description.unwrap_or_default()
+        ),
+        _ => String::new(),
     };
     let discovery = approx_tokens(&discovery_text);
 
@@ -137,10 +118,9 @@ fn compute_row(
     let source_text = std::fs::read_to_string(&source.source_path).with_context(|| {
         format!("failed to read source '{}'", source.source_path.display())
     })?;
-    let ref_tokens: u32 = REF_RE
-        .captures_iter(&source_text)
-        .filter_map(|caps| {
-            let rel = caps[1].trim().to_string();
+    let ref_tokens: u32 = crate::refs::extract_path_refs(&source_text)
+        .into_iter()
+        .filter_map(|rel| {
             let path = source.skill_dir.join(&rel);
             std::fs::read_to_string(&path).ok().map(|t| approx_tokens(&t))
         })

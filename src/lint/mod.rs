@@ -1,24 +1,16 @@
-//! Lint rules for skill quality validation.
+//! Lint engine for skill quality validation.
+//!
+//! The engine orchestrates all rules. Individual rule implementations live in
+//! the `rules` submodule — one file per rule (or closely-related rule group).
 
 use crate::config::SkilletConfig;
 use crate::workspace::{self, SkillSource};
 use anyhow::Result;
-use gray_matter::{engine::YAML, Matter};
 use owo_colors::OwoColorize;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use serde::Serialize;
 use std::path::Path;
-use std::sync::LazyLock;
 
-static TYPED_REF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap());
-
-static FRAGMENT_INCLUDE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\{\{>\s*([\w-]+)\s*\}\}").unwrap());
-
-static UNTYPED_BACKTICK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`([^`\n]+)`").unwrap());
+mod rules;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -171,12 +163,12 @@ fn lint_skill(
         }
     };
 
-    diags.extend(check_frontmatter(source, &raw));
-    diags.extend(check_refs(source, &raw, config, all_sources, skills_src_dir));
-    diags.extend(check_untyped_backticks(source, &raw, all_sources));
-    diags.extend(check_stale_build(source, config, fragments_dir, skills_src_dir));
-    diags.extend(check_oversized_skill(source, config));
-    diags.extend(check_oversized_description(source, &raw, config));
+    diags.extend(rules::invalid_frontmatter::check(source, &raw, config));
+    diags.extend(rules::stale_refs::check(source, &raw, config, all_sources, skills_src_dir));
+    diags.extend(rules::untyped_backtick::check(source, &raw, all_sources, config));
+    diags.extend(rules::stale_build::check(source, config, fragments_dir, skills_src_dir));
+    diags.extend(rules::oversized::check_skill(source, config));
+    diags.extend(rules::oversized::check_description(source, &raw, config));
 
     diags
 }
@@ -189,391 +181,15 @@ fn lint_workspace(
     fragments_dir: &Path,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
-    diags.extend(check_unused_fragments(all_sources, fragments_dir));
-    diags.extend(check_oversized_fragments(config, fragments_dir));
+    diags.extend(rules::unused_fragment::check(all_sources, fragments_dir, config));
+    diags.extend(rules::oversized::check_fragments(config, fragments_dir));
     // duplication: not yet implemented (planned for a future story)
     diags
 }
 
-// ── Rule: invalid-frontmatter ─────────────────────────────────────────────────
+// ── Shared helper ─────────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-struct SkillFm {
-    name: Option<String>,
-    description: Option<String>,
-}
-
-fn check_frontmatter(source: &SkillSource, raw: &str) -> Vec<Diagnostic> {
-    let matter = Matter::<YAML>::new();
-    let parsed = match matter.parse::<SkillFm>(raw) {
-        Ok(p) => p,
-        Err(e) => {
-            return vec![diag(
-                Severity::Error,
-                &source.name,
-                "invalid-frontmatter",
-                format!("failed to parse frontmatter: {e}"),
-            )]
-        }
-    };
-
-    let mut diags = Vec::new();
-    let fm = match parsed.data {
-        Some(fm) => fm,
-        None => {
-            diags.push(diag(
-                Severity::Error,
-                &source.name,
-                "invalid-frontmatter",
-                "missing frontmatter".into(),
-            ));
-            return diags;
-        }
-    };
-
-    match fm.name.as_deref() {
-        None => diags.push(diag(
-            Severity::Error,
-            &source.name,
-            "invalid-frontmatter",
-            "missing 'name' field".into(),
-        )),
-        Some(n) if n != source.name => diags.push(diag(
-            Severity::Error,
-            &source.name,
-            "invalid-frontmatter",
-            format!("name '{}' does not match directory '{}'", n, source.name),
-        )),
-        _ => {}
-    }
-
-    if fm.description.as_deref().map(|d| d.trim().is_empty()).unwrap_or(true) {
-        diags.push(diag(
-            Severity::Error,
-            &source.name,
-            "invalid-frontmatter",
-            "missing or empty 'description' field".into(),
-        ));
-    }
-
-    diags
-}
-
-// ── Rule: stale-path-ref / stale-command-ref / stale-skill-ref ────────────────
-
-fn check_refs(
-    source: &SkillSource,
-    raw: &str,
-    config: &SkilletConfig,
-    all_sources: &[SkillSource],
-    skills_src_dir: &Path,
-) -> Vec<Diagnostic> {
-    let mut diags = Vec::new();
-
-    for caps in TYPED_REF_RE.captures_iter(raw) {
-        let prefix = &caps[1];
-        let value = caps[2].trim();
-
-        match prefix {
-            "ref" => {
-                if !source.skill_dir.join(value).exists() {
-                    diags.push(diag(
-                        Severity::Error,
-                        &source.name,
-                        "stale-path-ref",
-                        format!("ref path not found: '{value}'"),
-                    ));
-                }
-            }
-            "cmd" => {
-                let cmd = value.split_whitespace().next().unwrap_or(value);
-                let allowed = config.lint.allowed_commands.iter().any(|c| c == cmd);
-                if !allowed && !workspace::is_on_path(cmd) {
-                    diags.push(diag(
-                        Severity::Warning,
-                        &source.name,
-                        "stale-command-ref",
-                        format!("command '{cmd}' not found on PATH"),
-                    ));
-                }
-            }
-            "skill" => {
-                if !all_sources.iter().any(|s| s.name == value) && !skills_src_dir.join(value).is_dir()
-                {
-                    diags.push(diag(
-                        Severity::Error,
-                        &source.name,
-                        "stale-skill-ref",
-                        format!("skill '{value}' not found in workspace"),
-                    ));
-                }
-            }
-            _ => {} // var:: / env:: validated by build
-        }
-    }
-
-    diags
-}
-
-// ── Rule: untyped-backtick ────────────────────────────────────────────────────
-
-fn check_untyped_backticks(
-    source: &SkillSource,
-    raw: &str,
-    all_sources: &[SkillSource],
-) -> Vec<Diagnostic> {
-    // Strip frontmatter and already-typed refs before scanning
-    let body = extract_body(raw);
-    let stripped = TYPED_REF_RE.replace_all(&body, "");
-
-    let mut diags = Vec::new();
-    for caps in UNTYPED_BACKTICK_RE.captures_iter(&stripped) {
-        let content = caps[1].trim();
-        if let Some(kind) = classify_backtick(content, all_sources) {
-            diags.push(diag(
-                Severity::Info,
-                &source.name,
-                "untyped-backtick",
-                format!("`{content}` looks like a {kind} — consider `{kind}::{content}`"),
-            ));
-        }
-    }
-    diags
-}
-
-// ── Rule: stale-build ─────────────────────────────────────────────────────────
-
-fn check_stale_build(
-    source: &SkillSource,
-    config: &SkilletConfig,
-    fragments_dir: &Path,
-    skills_src_dir: &Path,
-) -> Vec<Diagnostic> {
-    let output_path = source.skill_out_dir.join("SKILL.md");
-
-    if !output_path.exists() {
-        return vec![diag(
-            Severity::Error,
-            &source.name,
-            "stale-build",
-            "SKILL.md not found — run `skillet build`".into(),
-        )];
-    }
-
-    let expected = match crate::build::compile_to_string(source, config, fragments_dir, skills_src_dir)
-    {
-        Ok((s, _)) => s,
-        Err(e) => {
-            return vec![diag(
-                Severity::Error,
-                &source.name,
-                "stale-build",
-                format!("cannot verify build output: {e}"),
-            )]
-        }
-    };
-
-    match std::fs::read_to_string(&output_path) {
-        Ok(on_disk) if on_disk == expected => vec![],
-        Ok(_) => vec![diag(
-            Severity::Error,
-            &source.name,
-            "stale-build",
-            "SKILL.md is out of date — run `skillet build`".into(),
-        )],
-        Err(e) => vec![diag(
-            Severity::Error,
-            &source.name,
-            "stale-build",
-            format!("cannot read SKILL.md: {e}"),
-        )],
-    }
-}
-
-// ── Rule: oversized-skill ─────────────────────────────────────────────────────
-
-fn check_oversized_skill(source: &SkillSource, config: &SkilletConfig) -> Vec<Diagnostic> {
-    let output_path = source.skill_out_dir.join("SKILL.md");
-    let Ok(content) = std::fs::read_to_string(&output_path) else {
-        return vec![];
-    };
-    let tokens = approx_tokens(&content);
-    if tokens > config.lint.max_activation_tokens {
-        vec![diag(
-            Severity::Warning,
-            &source.name,
-            "oversized-skill",
-            format!(
-                "activation ~{tokens} tokens exceeds limit of {}",
-                config.lint.max_activation_tokens
-            ),
-        )]
-    } else {
-        vec![]
-    }
-}
-
-// ── Rule: oversized-description ──────────────────────────────────────────────
-
-fn check_oversized_description(
-    source: &SkillSource,
-    raw: &str,
-    config: &SkilletConfig,
-) -> Vec<Diagnostic> {
-    #[derive(Deserialize)]
-    struct Fm {
-        name: Option<String>,
-        description: Option<String>,
-    }
-
-    let matter = Matter::<YAML>::new();
-    let Ok(parsed) = matter.parse::<Fm>(raw) else {
-        return vec![];
-    };
-    let Some(fm) = parsed.data else {
-        return vec![];
-    };
-
-    let text = format!(
-        "{} {}",
-        fm.name.as_deref().unwrap_or(""),
-        fm.description.as_deref().unwrap_or("")
-    );
-    let tokens = approx_tokens(&text);
-    if tokens > config.lint.max_discovery_tokens {
-        vec![diag(
-            Severity::Warning,
-            &source.name,
-            "oversized-description",
-            format!(
-                "discovery ~{tokens} tokens exceeds limit of {}",
-                config.lint.max_discovery_tokens
-            ),
-        )]
-    } else {
-        vec![]
-    }
-}
-
-// ── Rule: unused-fragment ─────────────────────────────────────────────────────
-
-fn check_unused_fragments(all_sources: &[SkillSource], fragments_dir: &Path) -> Vec<Diagnostic> {
-    if !fragments_dir.exists() {
-        return vec![];
-    }
-
-    let mut used: HashSet<String> = HashSet::new();
-    for source in all_sources {
-        if let Ok(raw) = std::fs::read_to_string(&source.source_path) {
-            for caps in FRAGMENT_INCLUDE_RE.captures_iter(&raw) {
-                used.insert(caps[1].to_string());
-            }
-        }
-    }
-
-    let Ok(entries) = std::fs::read_dir(fragments_dir) else {
-        return vec![];
-    };
-
-    entries
-        .flatten()
-        .filter_map(|e| {
-            let fname = e.file_name().into_string().ok()?;
-            let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
-            if used.contains(&frag_name) {
-                return None;
-            }
-            Some(diag(
-                Severity::Warning,
-                "<workspace>",
-                "unused-fragment",
-                format!("fragment '{frag_name}' is not included by any skill"),
-            ))
-        })
-        .collect()
-}
-
-// ── Rule: oversized-fragment ──────────────────────────────────────────────────
-
-fn check_oversized_fragments(config: &SkilletConfig, fragments_dir: &Path) -> Vec<Diagnostic> {
-    if !fragments_dir.exists() {
-        return vec![];
-    }
-    let Ok(entries) = std::fs::read_dir(fragments_dir) else {
-        return vec![];
-    };
-
-    entries
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            let fname = path.file_name()?.to_string_lossy().into_owned();
-            let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
-            let content = std::fs::read_to_string(&path).ok()?;
-            let tokens = approx_tokens(&content);
-            if tokens > config.lint.max_fragment_tokens {
-                Some(diag(
-                    Severity::Warning,
-                    "<workspace>",
-                    "oversized-fragment",
-                    format!(
-                        "fragment '{frag_name}' is ~{tokens} tokens (limit: {})",
-                        config.lint.max_fragment_tokens
-                    ),
-                ))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Extracts the markdown body after the frontmatter `---` delimiters.
-fn extract_body(raw: &str) -> String {
-    let matter = Matter::<YAML>::new();
-    matter
-        .parse::<gray_matter::Pod>(raw)
-        .map(|p| p.content)
-        .unwrap_or_else(|_| raw.to_string())
-}
-
-/// Classifies untyped backtick content using the ADR-0002 heuristics.
-///
-/// Returns a short type name (`"path"`, `"url"`, `"skill"`, `"command"`) or
-/// `None` if the content is not recognisable as a ref.
-fn classify_backtick(content: &str, all_sources: &[SkillSource]) -> Option<&'static str> {
-    if content.starts_with("http://") || content.starts_with("https://") {
-        return Some("url");
-    }
-    let path_exts = [
-        ".sh", ".py", ".rs", ".toml", ".json", ".yaml", ".yml", ".md", ".txt", ".ts", ".js",
-    ];
-    if content.contains('/') || path_exts.iter().any(|e| content.ends_with(e)) {
-        return Some("path");
-    }
-    if all_sources.iter().any(|s| s.name == content) {
-        return Some("skill");
-    }
-    // Command heuristic: lowercase/hyphenated first word + flag-like second token
-    let parts: Vec<&str> = content.split_whitespace().collect();
-    if parts.len() >= 2 {
-        let cmd = parts[0];
-        let is_cmd_like = cmd.chars().all(|c| c.is_lowercase() || c == '-' || c == '_');
-        let has_flag = parts[1..].iter().any(|p| p.starts_with('-'));
-        if is_cmd_like && has_flag {
-            return Some("command");
-        }
-    }
-    None
-}
-
-fn approx_tokens(text: &str) -> u32 {
-    crate::tokens::approx_tokens(text)
-}
-
-fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {
+pub(crate) fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {
     Diagnostic {
         rule: rule.to_string(),
         severity,
@@ -633,7 +249,7 @@ mod tests {
         fs::create_dir_all(dir.join(&cfg.workspace.fragments_dir)).unwrap();
     }
 
-    // ── check_frontmatter ────────────────────────────────────────────────────
+    // ── rules::invalid_frontmatter ───────────────────────────────────────────
 
     #[test]
     fn check_frontmatter_passes_for_valid_skill() {
@@ -646,7 +262,11 @@ mod tests {
         );
 
         // Act
-        let diags = check_frontmatter(&src, &fs::read_to_string(&src.source_path).unwrap());
+        let diags = rules::invalid_frontmatter::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &SkilletConfig::default(),
+        );
 
         // Assert
         assert!(diags.is_empty());
@@ -663,7 +283,11 @@ mod tests {
         );
 
         // Act
-        let diags = check_frontmatter(&src, &fs::read_to_string(&src.source_path).unwrap());
+        let diags = rules::invalid_frontmatter::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &SkilletConfig::default(),
+        );
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "invalid-frontmatter" && d.severity == Severity::Error));
@@ -676,13 +300,17 @@ mod tests {
         let src = make_source(tmp.path(), "my-skill", "---\nname: my-skill\n---\n");
 
         // Act
-        let diags = check_frontmatter(&src, &fs::read_to_string(&src.source_path).unwrap());
+        let diags = rules::invalid_frontmatter::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &SkilletConfig::default(),
+        );
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "invalid-frontmatter"));
     }
 
-    // ── check_refs ───────────────────────────────────────────────────────────
+    // ── rules::stale_refs ────────────────────────────────────────────────────
 
     #[test]
     fn check_refs_errors_on_missing_path_ref() {
@@ -696,7 +324,13 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("src/skills"));
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "stale-path-ref"));
@@ -715,7 +349,13 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("src/skills"));
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
 
         // Assert
         assert!(diags.is_empty());
@@ -733,22 +373,29 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check_refs(&src, &fs::read_to_string(&src.source_path).unwrap(), &config, &[], &tmp.path().join("src/skills"));
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "stale-skill-ref"));
     }
 
-    // ── check_unused_fragments ───────────────────────────────────────────────
+    // ── rules::unused_fragment ───────────────────────────────────────────────
 
     #[test]
     fn check_unused_fragments_warns_on_unreferenced_fragment() {
         // Arrange
         let tmp = TempDir::new().unwrap();
         fs::write(tmp.path().join("unused.fragment.pan"), "# unused\n").unwrap();
+        let config = SkilletConfig::default();
 
         // Act
-        let diags = check_unused_fragments(&[], tmp.path());
+        let diags = rules::unused_fragment::check(&[], tmp.path(), &config);
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "unused-fragment" && d.message.contains("unused")));
@@ -769,9 +416,10 @@ mod tests {
             skill_dir,
             skill_out_dir: tmp.path().join("skills/diagnose"),
         }];
+        let config = SkilletConfig::default();
 
         // Act
-        let diags = check_unused_fragments(&sources, tmp.path());
+        let diags = rules::unused_fragment::check(&sources, tmp.path(), &config);
 
         // Assert
         assert!(diags.is_empty());
@@ -791,7 +439,6 @@ mod tests {
             "---\nname: good\ndescription: a good skill\n---\n\n# Good\n",
         )
         .unwrap();
-        // Build first so stale-build doesn't fire
         crate::build::run(tmp.path(), Some("good")).unwrap();
 
         // Act
@@ -828,10 +475,6 @@ mod tests {
         init_workspace(tmp.path());
         let skill_src_dir = tmp.path().join("src/skills/my-skill");
         fs::create_dir_all(&skill_src_dir).unwrap();
-        // stale-build fires as a warning... actually stale-build is an error.
-        // Use a skill that won't fire errors but would have warnings via stale-build suppressed.
-        // Instead, create a skill that is built so stale-build won't fire,
-        // then verify strict mode upgrades any remaining warnings.
         fs::write(
             skill_src_dir.join("my-skill.pan"),
             "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
@@ -855,7 +498,6 @@ mod tests {
     fn run_disabled_rule_suppresses_diagnostic() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        // Write a skillet.toml with stale-build disabled
         let custom_toml = "[workspace]\nskills_src_dir = 'src/skills'\nskills_out_dir = 'skills'\nfragments_dir = 'src/skills/_fragments'\n\
             [lint]\nmax_activation_tokens = 4000\nmax_discovery_tokens = 100\nmax_fragment_tokens = 500\n\
             allowed_commands = []\ndisable = ['stale-build', 'invalid-frontmatter']\n\
@@ -867,7 +509,6 @@ mod tests {
         fs::create_dir_all(tmp.path().join("src/skills/_fragments")).unwrap();
         let skill_src_dir = tmp.path().join("src/skills/bad");
         fs::create_dir_all(&skill_src_dir).unwrap();
-        // wrong name + no SKILL.md — would normally fire invalid-frontmatter + stale-build
         fs::write(
             skill_src_dir.join("bad.pan"),
             "---\nname: wrong\ndescription: x\n---\n\n# body\n",
@@ -893,7 +534,6 @@ mod tests {
             "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
         )
         .unwrap();
-        // Intentionally do NOT build — SKILL.md absent
 
         // Act
         let clean = run(tmp.path(), None, &LintOptions::default()).unwrap();
