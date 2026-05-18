@@ -3,6 +3,7 @@
 //! This crate provides the core logic for the `skillet` CLI tool.
 
 pub mod build;
+pub mod check;
 pub mod budget;
 pub mod config;
 pub mod init;

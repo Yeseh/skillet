@@ -44,6 +44,12 @@ enum Commands {
         #[arg(long, default_value = "human")]
         format: FormatArg,
     },
+    /// Verify compiled SKILL.md files are up-to-date with their sources
+    Check {
+        /// Output format
+        #[arg(long, default_value = "human")]
+        format: FormatArg,
+    },
     /// Check skills for quality issues
     Lint {
         /// Name of a single skill to lint (lints all if omitted)
@@ -74,6 +80,17 @@ fn main() -> Result<()> {
         Commands::Build { name } => {
             let cwd = std::env::current_dir()?;
             skillet::build::run(&cwd, name.as_deref())?;
+        }
+        Commands::Check { format } => {
+            let cwd = std::env::current_dir()?;
+            let fmt = match format {
+                FormatArg::Json => skillet::check::OutputFormat::Json,
+                FormatArg::Human => skillet::check::OutputFormat::Human,
+            };
+            let fresh = skillet::check::run(&cwd, fmt)?;
+            if !fresh {
+                std::process::exit(1);
+            }
         }
         Commands::Budget { name, format } => {
             let cwd = std::env::current_dir()?;
