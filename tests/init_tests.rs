@@ -139,3 +139,91 @@ fn init_adopt_copies_skill_md_as_dot_skill_files() {
     assert!(tmp.path().join("skillet.toml").is_file());
     assert!(tmp.path().join("skills/_fragments").is_dir());
 }
+
+// ── budget integration tests ──────────────────────────────────────────────────
+
+#[test]
+fn budget_runs_on_built_workspace() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    skillet::init::run(tmp.path(), false).unwrap();
+    let skill_dir = tmp.path().join("skills/my-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("my-skill.skill"),
+        "---\nname: my-skill\ndescription: \"does stuff\"\n---\n\n## Usage\nrun it\n",
+    )
+    .unwrap();
+    skillet::build::run(tmp.path(), None).unwrap();
+
+    // Act — should not error
+    let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Human);
+
+    // Assert
+    assert!(result.is_ok(), "budget::run should succeed on built workspace");
+}
+
+#[test]
+fn budget_json_format_produces_array() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    skillet::init::run(tmp.path(), false).unwrap();
+    let skill_dir = tmp.path().join("skills/my-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("my-skill.skill"),
+        "---\nname: my-skill\ndescription: \"a skill\"\n---\n\n## Body\ncontent here\n",
+    )
+    .unwrap();
+    skillet::build::run(tmp.path(), None).unwrap();
+
+    // Act
+    let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Json);
+
+    // Assert
+    assert!(result.is_ok());
+}
+
+#[test]
+fn budget_single_skill_succeeds() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    skillet::init::run(tmp.path(), false).unwrap();
+    let skill_dir = tmp.path().join("skills/alpha");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("alpha.skill"),
+        "---\nname: alpha\ndescription: \"alpha skill\"\n---\n\n## Alpha\ncontent\n",
+    )
+    .unwrap();
+    skillet::build::run(tmp.path(), Some("alpha")).unwrap();
+
+    // Act
+    let result =
+        skillet::budget::run(tmp.path(), Some("alpha"), skillet::budget::OutputFormat::Human);
+
+    // Assert
+    assert!(result.is_ok());
+}
+
+#[test]
+fn budget_errors_when_skill_not_built() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    skillet::init::run(tmp.path(), false).unwrap();
+    let skill_dir = tmp.path().join("skills/unbuilt");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("unbuilt.skill"),
+        "---\nname: unbuilt\ndescription: \"not built yet\"\n---\n\n## Body\n",
+    )
+    .unwrap();
+    // deliberately skip skillet::build::run
+
+    // Act
+    let result =
+        skillet::budget::run(tmp.path(), Some("unbuilt"), skillet::budget::OutputFormat::Human);
+
+    // Assert
+    assert!(result.is_err(), "should error when SKILL.md is missing");
+}

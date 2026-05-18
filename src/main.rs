@@ -28,6 +28,14 @@ enum Commands {
         /// Name of a single skill to compile (compiles all if omitted)
         name: Option<String>,
     },
+    /// Show token budget for skills in the workspace
+    Budget {
+        /// Name of a single skill to show (shows all if omitted)
+        name: Option<String>,
+        /// Output format: human (default) or json
+        #[arg(long, default_value = "human")]
+        format: String,
+    },
     /// Check skills for quality issues
     Lint {
         /// Name of a single skill to lint (lints all if omitted)
@@ -58,6 +66,14 @@ fn main() -> Result<()> {
         Commands::Build { name } => {
             let cwd = std::env::current_dir()?;
             skillet::build::run(&cwd, name.as_deref())?;
+        }
+        Commands::Budget { name, format } => {
+            let cwd = std::env::current_dir()?;
+            let fmt = match format.as_str() {
+                "json" => skillet::budget::OutputFormat::Json,
+                _ => skillet::budget::OutputFormat::Human,
+            };
+            skillet::budget::run(&cwd, name.as_deref(), fmt)?;
         }
         Commands::Lint { name, strict, pedantic, format } => {
             let cwd = std::env::current_dir()?;

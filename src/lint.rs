@@ -567,9 +567,8 @@ fn classify_backtick(content: &str, all_sources: &[SkillSource]) -> Option<&'sta
     None
 }
 
-/// Approximates token count as `ceil(chars / 4)` (GPT tokenizer average for English).
 fn approx_tokens(text: &str) -> u32 {
-    text.len().div_ceil(4) as u32
+    crate::tokens::approx_tokens(text)
 }
 
 fn is_on_path(cmd: &str) -> bool {
