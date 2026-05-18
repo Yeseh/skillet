@@ -35,6 +35,12 @@ enum Commands {
     Build {
         /// Name of a single skill to compile (compiles all if omitted)
         name: Option<String>,
+        /// Disable URL verification regardless of config
+        #[arg(long)]
+        offline: bool,
+        /// Promote URL-check warnings to errors
+        #[arg(long)]
+        strict: bool,
     },
     /// Show token budget for skills in the workspace
     Budget {
@@ -77,9 +83,10 @@ fn main() -> Result<()> {
             let cwd = std::env::current_dir()?;
             skillet::new::run(&cwd, &name)?;
         }
-        Commands::Build { name } => {
+        Commands::Build { name, offline, strict } => {
             let cwd = std::env::current_dir()?;
-            skillet::build::run(&cwd, name.as_deref())?;
+            let opts = skillet::build::BuildOptions::new(offline, strict);
+            skillet::build::run(&cwd, name.as_deref(), &opts)?;
         }
         Commands::Check { format } => {
             let cwd = std::env::current_dir()?;

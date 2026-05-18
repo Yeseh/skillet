@@ -534,7 +534,7 @@ mod tests {
             "---\nname: good\ndescription: a good skill\n---\n\n# Good\n",
         )
         .unwrap();
-        crate::build::run(tmp.path(), Some("good")).unwrap();
+        crate::build::run(tmp.path(), Some("good"), &Default::default()).unwrap();
 
         // Act
         let clean = run(tmp.path(), None, &LintOptions::default()).unwrap();
@@ -575,7 +575,7 @@ mod tests {
             "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
         )
         .unwrap();
-        crate::build::run(tmp.path(), Some("my-skill")).unwrap();
+        crate::build::run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
 
         let opts_normal = LintOptions { strict: false, ..Default::default() };
         let opts_strict = LintOptions { strict: true, ..Default::default() };

@@ -161,7 +161,7 @@ fn budget_runs_on_built_workspace() {
         "---\nname: my-skill\ndescription: \"does stuff\"\n---\n\n## Usage\nrun it\n",
     )
     .unwrap();
-    skillet::build::run(tmp.path(), None).unwrap();
+    skillet::build::run(tmp.path(), None, &Default::default()).unwrap();
 
     // Act — should not error
     let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Human);
@@ -182,7 +182,7 @@ fn budget_json_format_produces_array() {
         "---\nname: my-skill\ndescription: \"a skill\"\n---\n\n## Body\ncontent here\n",
     )
     .unwrap();
-    skillet::build::run(tmp.path(), None).unwrap();
+    skillet::build::run(tmp.path(), None, &Default::default()).unwrap();
 
     // Act
     let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Json);
@@ -203,7 +203,7 @@ fn budget_single_skill_succeeds() {
         "---\nname: alpha\ndescription: \"alpha skill\"\n---\n\n## Alpha\ncontent\n",
     )
     .unwrap();
-    skillet::build::run(tmp.path(), Some("alpha")).unwrap();
+    skillet::build::run(tmp.path(), Some("alpha"), &Default::default()).unwrap();
 
     // Act
     let result =

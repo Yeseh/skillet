@@ -16,16 +16,39 @@ use std::sync::LazyLock;
 static FRAGMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\{\{>\s*([\w-]+)\s*\}\}\s*$").unwrap());
 
+/// Options controlling the build step.
+#[non_exhaustive]
+#[derive(Debug, Default)]
+pub struct BuildOptions {
+    /// Skip URL verification regardless of `verify_urls` in `skillet.toml`.
+    pub offline: bool,
+    /// Promote URL-check warnings to errors (build fails if any URL is broken
+    /// or unreachable).
+    pub strict: bool,
+}
+
+impl BuildOptions {
+    /// Creates a new `BuildOptions` with both flags specified.
+    pub fn new(offline: bool, strict: bool) -> Self {
+        Self { offline, strict }
+    }
+}
+
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 ///
 /// Compiles only the named skill when `skill_name` is `Some`, or all skills
 /// in the workspace when it is `None`.
 ///
+/// When `config.build.verify_urls` is `true` and `opts.offline` is `false`,
+/// all HTTP/HTTPS URLs referenced by the compiled skills are verified for
+/// reachability.  Results are printed as warnings; with `opts.strict` any
+/// broken or unreachable URL causes the build to fail.
+///
 /// # Errors
 ///
 /// Returns an error if any skill fails to compile (missing fragment, undefined
 /// var/env ref, missing file ref, or frontmatter name mismatch).
-pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
+pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &BuildOptions) -> Result<()> {
     let config = config::load(workspace)?;
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
@@ -64,10 +87,87 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
     rebuild_fragment_entries(&mut lockfile, &fragments_dir)?;
 
     crate::lockfile::write(workspace, &lockfile)?;
+
+    // URL verification (opt-in via config, suppressible with --offline).
+    if config.build.verify_urls && !opts.offline {
+        verify_urls_from_lockfile(&lockfile, opts.strict)?;
+    }
+
     Ok(())
 }
 
-/// Compiles a skill source to a `String` without writing to disk or touching the lockfile.
+/// Collects all `url::` refs from the lockfile, verifies them, and prints
+/// results.  Returns `Ok(())` unless `strict` is set and any URL failed.
+fn verify_urls_from_lockfile(lockfile: &crate::lockfile::Lockfile, strict: bool) -> Result<()> {
+    use crate::net::url_verify::{UrlCheckResult, verify_urls};
+    use owo_colors::OwoColorize;
+
+    let urls: Vec<String> = lockfile
+        .skills
+        .values()
+        .flat_map(|e| e.refs.iter())
+        .filter_map(|r| r.strip_prefix("url::").map(str::to_string))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    if urls.is_empty() {
+        return Ok(());
+    }
+
+    println!("checking {} URL(s)…", urls.len());
+    let outcomes = verify_urls(&urls);
+
+    let mut had_error = false;
+    for outcome in &outcomes {
+        match &outcome.result {
+            UrlCheckResult::Ok => {}
+            UrlCheckResult::Broken(code) => {
+                eprintln!(
+                    "{} {} ({})",
+                    "warning[broken-url]:".yellow(),
+                    outcome.url,
+                    code
+                );
+                had_error = true;
+            }
+            UrlCheckResult::PossiblyDown(code) => {
+                eprintln!(
+                    "{} {} ({})",
+                    "info[url-possibly-down]:".cyan(),
+                    outcome.url,
+                    code
+                );
+            }
+            UrlCheckResult::Unreachable(reason) => {
+                eprintln!(
+                    "{} {} — {}",
+                    "warning[unreachable-url]:".yellow(),
+                    outcome.url,
+                    reason
+                );
+                had_error = true;
+            }
+            UrlCheckResult::Rejected(reason) => {
+                eprintln!(
+                    "{} {} — {}",
+                    "warning[rejected-url]:".yellow(),
+                    outcome.url,
+                    reason
+                );
+                had_error = true;
+            }
+        }
+    }
+
+    if strict && had_error {
+        bail!("URL verification failed (--strict mode)");
+    }
+
+    Ok(())
+}
+
+
 ///
 /// Returns the compiled content and the list of fragment names inlined.
 /// Used by `skillet lint` to verify that `SKILL.md` is up to date.
@@ -547,7 +647,7 @@ mod tests {
         .unwrap();
 
         // Act
-        run(tmp.path(), Some("my-skill")).unwrap();
+        run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
 
         // Assert
         let skill_md = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
@@ -569,7 +669,7 @@ mod tests {
         .unwrap();
 
         // Act
-        run(tmp.path(), None).unwrap();
+        run(tmp.path(), None, &Default::default()).unwrap();
 
         // Assert
         let lf = crate::lockfile::read(tmp.path()).unwrap();
@@ -591,7 +691,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let result = run(tmp.path(), Some("my-skill"));
+        let result = run(tmp.path(), Some("my-skill"), &Default::default());
 
         // Assert
         assert!(result.is_err());
@@ -605,7 +705,7 @@ mod tests {
         init_workspace(tmp.path());
 
         // Act
-        let result = run(tmp.path(), Some("nonexistent"));
+        let result = run(tmp.path(), Some("nonexistent"), &Default::default());
 
         // Assert
         assert!(result.is_err());
@@ -630,7 +730,7 @@ mod tests {
         .unwrap();
 
         // Act
-        run(tmp.path(), Some("my-skill")).unwrap();
+        run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
 
         // Assert
         let output = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
@@ -702,7 +802,7 @@ mod tests {
         .unwrap();
 
         // Act
-        run(tmp.path(), Some("alpha")).unwrap();
+        run(tmp.path(), Some("alpha"), &Default::default()).unwrap();
         let lf = crate::lockfile::read(tmp.path()).unwrap();
 
         // Assert
@@ -733,7 +833,7 @@ mod tests {
         }
 
         // Act
-        run(tmp.path(), None).unwrap();
+        run(tmp.path(), None, &Default::default()).unwrap();
         let lf = crate::lockfile::read(tmp.path()).unwrap();
 
         // Assert
@@ -787,7 +887,7 @@ mod tests {
         .unwrap();
 
         // Act
-        run(tmp.path(), Some("my-skill")).unwrap();
+        run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
         let lf = crate::lockfile::read(tmp.path()).unwrap();
 
         // Assert

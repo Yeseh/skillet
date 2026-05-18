@@ -245,7 +245,7 @@ mod tests {
         .unwrap();
 
         // Run build so the lockfile and SKILL.md are consistent.
-        crate::build::run(tmp, None).unwrap();
+        crate::build::run(tmp, None, &Default::default()).unwrap();
     }
 
     #[test]
@@ -405,7 +405,7 @@ mod tests {
             "---\nname: my-skill\ndescription: \"test\"\n---\n\n{{> note }}\n",
         )
         .unwrap();
-        crate::build::run(tmp.path(), None).unwrap();
+        crate::build::run(tmp.path(), None, &Default::default()).unwrap();
 
         // Edit the fragment without rebuilding
         fs::write(

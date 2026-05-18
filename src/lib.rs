@@ -9,6 +9,7 @@ pub mod config;
 pub mod init;
 pub mod lint;
 pub mod lockfile;
+pub mod net;
 pub mod new;
 pub mod parse;
 pub mod refs;
