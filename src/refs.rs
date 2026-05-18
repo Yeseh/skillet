@@ -20,6 +20,38 @@ static PATH_REF_RE: LazyLock<Regex> =
 pub(crate) static UNTYPED_BACKTICK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`([^`\n]+)`").unwrap());
 
+/// Matches standard markdown links: `[text](target)`.  Captures the target.
+pub(crate) static MARKDOWN_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
+
+/// A parsed markdown link target with classification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownLink {
+    /// Display text of the link.
+    pub text: String,
+    /// Raw target string (path or URL).
+    pub target: String,
+    /// Whether the target looks like a URL.
+    pub is_url: bool,
+}
+
+/// Extracts all markdown link targets from `text`.
+///
+/// Each entry carries the display text, raw target, and a flag indicating
+/// whether the target is a URL (`http://` / `https://` prefix).  Image links
+/// (`![]()`) are included — the leading `!` is part of the display text.
+pub fn extract_markdown_links(text: &str) -> Vec<MarkdownLink> {
+    MARKDOWN_LINK_RE
+        .captures_iter(text)
+        .map(|caps| {
+            let target = caps[2].trim().to_string();
+            let is_url =
+                target.starts_with("http://") || target.starts_with("https://");
+            MarkdownLink { text: caps[1].to_string(), target, is_url }
+        })
+        .collect()
+}
+
 /// Extracts the `ref::` path values from `text`.
 ///
 /// Used by the budget module to accumulate transitive token costs.
@@ -118,6 +150,39 @@ mod tests {
     #[test]
     fn classify_untyped_returns_none_for_plain_word() {
         assert_eq!(classify_untyped("something", &[]), None);
+    }
+
+    #[test]
+    fn extract_markdown_links_detects_path_link() {
+        let text = "See [the guide](./docs/guide.md) for details.";
+        let links = extract_markdown_links(text);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "./docs/guide.md");
+        assert!(!links[0].is_url);
+    }
+
+    #[test]
+    fn extract_markdown_links_detects_url_link() {
+        let text = "Visit [example](https://example.com).";
+        let links = extract_markdown_links(text);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "https://example.com");
+        assert!(links[0].is_url);
+    }
+
+    #[test]
+    fn extract_markdown_links_returns_empty_for_plain_text() {
+        let links = extract_markdown_links("no links here");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn extract_markdown_links_detects_multiple_links() {
+        let text = "[a](path/a.md) and [b](https://b.com)";
+        let links = extract_markdown_links(text);
+        assert_eq!(links.len(), 2);
+        assert!(!links[0].is_url);
+        assert!(links[1].is_url);
     }
 
     #[test]

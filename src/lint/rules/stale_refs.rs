@@ -55,7 +55,27 @@ pub fn check(
                     ));
                 }
             }
-            _ => {} // var:: / env:: validated by build
+            "var" => {
+                if !config.vars.contains_key(value) {
+                    diags.push(diag(
+                        Severity::Error,
+                        &source.name,
+                        "stale-var-ref",
+                        format!("var '{value}' not declared in [vars]"),
+                    ));
+                }
+            }
+            "env" => {
+                if !config.env.contains_key(value) {
+                    diags.push(diag(
+                        Severity::Error,
+                        &source.name,
+                        "stale-env-ref",
+                        format!("env '{value}' not declared in [env]"),
+                    ));
+                }
+            }
+            _ => {}
         }
     }
 

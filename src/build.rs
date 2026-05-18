@@ -2,7 +2,7 @@
 
 use crate::config::{self, SkilletConfig};
 use crate::lockfile::{FragmentLockEntry, LockMeta, Lockfile, SkillEntry};
-use crate::refs::TYPED_REF_RE;
+use crate::refs::{extract_markdown_links, TYPED_REF_RE};
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -112,6 +112,7 @@ fn compile_skill(
 
     let source_hash = workspace::hash_file(&source.source_path)?;
     let compiled_hash = hash_bytes(output.as_bytes());
+    let refs = collect_refs(&output);
 
     lockfile.skills.insert(
         source.name.clone(),
@@ -119,6 +120,7 @@ fn compile_skill(
             source_hash,
             compiled_hash,
             fragments_used,
+            refs,
         },
     );
 
@@ -299,6 +301,33 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Re
     }
 
     Ok(())
+}
+
+/// Collects all detectable refs from compiled SKILL.md text.
+///
+/// Gathers Layer 2 typed refs (`kind::value`) and Layer 1 markdown link targets
+/// (path links as `"path::value"`, URL links as `"url::value"`).  Duplicates
+/// are removed and the list is sorted for deterministic lockfile output.
+fn collect_refs(text: &str) -> Vec<String> {
+    let mut refs: Vec<String> = Vec::new();
+
+    // Layer 2: typed ref directives
+    for caps in TYPED_REF_RE.captures_iter(text) {
+        refs.push(format!("{}::{}", &caps[1], caps[2].trim()));
+    }
+
+    // Layer 1: markdown links
+    for link in extract_markdown_links(text) {
+        if link.is_url {
+            refs.push(format!("url::{}", link.target));
+        } else {
+            refs.push(format!("path::{}", link.target));
+        }
+    }
+
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 /// Returns `"sha256:<hex>"` of `bytes` (in-memory hashing for compiled output).
@@ -711,5 +740,64 @@ mod tests {
         let frag = lf.fragments.get("shared").expect("'shared' fragment entry missing");
         assert!(frag.used_by.contains(&"skill-a".to_string()));
         assert!(frag.used_by.contains(&"skill-b".to_string()));
+    }
+
+    // ── collect_refs ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn collect_refs_includes_typed_ref_directive() {
+        let text = "Use `cmd::git` for version control.";
+        let refs = collect_refs(text);
+        assert!(refs.contains(&"cmd::git".to_string()));
+    }
+
+    #[test]
+    fn collect_refs_includes_markdown_path_link() {
+        let text = "See [guide](./docs/guide.md).";
+        let refs = collect_refs(text);
+        assert!(refs.contains(&"path::./docs/guide.md".to_string()));
+    }
+
+    #[test]
+    fn collect_refs_includes_markdown_url_link() {
+        let text = "Visit [site](https://example.com).";
+        let refs = collect_refs(text);
+        assert!(refs.contains(&"url::https://example.com".to_string()));
+    }
+
+    #[test]
+    fn collect_refs_deduplicates_entries() {
+        let text = "`cmd::git` and `cmd::git`";
+        let refs = collect_refs(text);
+        assert_eq!(refs.iter().filter(|r| r.as_str() == "cmd::git").count(), 1);
+    }
+
+    #[test]
+    fn run_records_refs_in_lockfile() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        init_workspace(tmp.path());
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_src_dir).unwrap();
+        // skill references a declared var and a markdown URL
+        fs::write(
+            skill_src_dir.join("my-skill.pan"),
+            "---\nname: my-skill\ndescription: \"\"\n---\n\nProject: `var::project_name`. See [docs](https://example.com)\n",
+        )
+        .unwrap();
+
+        // Act
+        run(tmp.path(), Some("my-skill")).unwrap();
+        let lf = crate::lockfile::read(tmp.path()).unwrap();
+
+        // Assert
+        let entry = lf.skills.get("my-skill").expect("skill entry missing");
+        // var:: expands inline (no longer in compiled output as a directive),
+        // but the markdown URL link should be recorded.
+        assert!(
+            entry.refs.iter().any(|r| r.starts_with("url::")),
+            "expected a url:: ref in lockfile, got: {:?}",
+            entry.refs
+        );
     }
 }

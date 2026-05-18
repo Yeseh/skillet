@@ -41,6 +41,10 @@ pub struct SkillEntry {
     pub compiled_hash: String,
     /// Names of fragments inlined during compilation.
     pub fragments_used: Vec<String>,
+    /// All detected refs in the form `"kind::value"` (Layer 1 paths as `"path::value"`,
+    /// Layer 1 URLs as `"url::value"`, Layer 2 typed refs as `"kind::value"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<String>,
 }
 
 /// The full contents of `skillet.lock`.
@@ -102,6 +106,7 @@ mod tests {
                 source_hash: "sha256:abc".into(),
                 compiled_hash: "sha256:def".into(),
                 fragments_used: vec!["check-adrs".into()],
+                refs: vec![],
             },
         );
         lf.fragments.insert(

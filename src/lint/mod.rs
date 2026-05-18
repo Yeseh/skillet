@@ -165,6 +165,7 @@ fn lint_skill(
 
     diags.extend(rules::invalid_frontmatter::check(source, &raw, config));
     diags.extend(rules::stale_refs::check(source, &raw, config, all_sources, skills_src_dir));
+    diags.extend(rules::markdown_links::check(source, &raw, config));
     diags.extend(rules::untyped_backtick::check(source, &raw, all_sources, config));
     diags.extend(rules::stale_build::check(source, config, fragments_dir, skills_src_dir));
     diags.extend(rules::oversized::check_skill(source, config));
@@ -385,7 +386,101 @@ mod tests {
         assert!(diags.iter().any(|d| d.rule == "stale-skill-ref"));
     }
 
-    // ── rules::unused_fragment ───────────────────────────────────────────────
+    #[test]
+    fn check_refs_errors_on_undeclared_var_ref() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let src = make_source(
+            tmp.path(),
+            "my-skill",
+            "---\nname: my-skill\ndescription: x\n---\n\nSee `var::missing_var`\n",
+        );
+        let config = SkilletConfig::default();
+
+        // Act
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
+
+        // Assert
+        assert!(diags.iter().any(|d| d.rule == "stale-var-ref"));
+    }
+
+    #[test]
+    fn check_refs_passes_for_declared_var_ref() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let src = make_source(
+            tmp.path(),
+            "my-skill",
+            "---\nname: my-skill\ndescription: x\n---\n\nProject: `var::project_name`\n",
+        );
+        let config = SkilletConfig::default(); // has project_name in vars
+
+        // Act
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
+
+        // Assert
+        assert!(!diags.iter().any(|d| d.rule == "stale-var-ref"));
+    }
+
+    #[test]
+    fn check_refs_errors_on_undeclared_env_ref() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let src = make_source(
+            tmp.path(),
+            "my-skill",
+            "---\nname: my-skill\ndescription: x\n---\n\nCI: `env::UNKNOWN_ENV`\n",
+        );
+        let config = SkilletConfig::default();
+
+        // Act
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
+
+        // Assert
+        assert!(diags.iter().any(|d| d.rule == "stale-env-ref"));
+    }
+
+    #[test]
+    fn check_refs_passes_for_declared_env_ref() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let src = make_source(
+            tmp.path(),
+            "my-skill",
+            "---\nname: my-skill\ndescription: x\n---\n\nCI: `env::CI`\n",
+        );
+        let config = SkilletConfig::default(); // has CI in env
+
+        // Act
+        let diags = rules::stale_refs::check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+            &[],
+            &tmp.path().join("src/skills"),
+        );
+
+        // Assert
+        assert!(!diags.iter().any(|d| d.rule == "stale-env-ref"));
+    }
 
     #[test]
     fn check_unused_fragments_warns_on_unreferenced_fragment() {

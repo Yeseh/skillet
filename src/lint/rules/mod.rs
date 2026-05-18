@@ -2,6 +2,7 @@
 pub(super) use super::{diag, Diagnostic, Severity};
 
 pub(super) mod invalid_frontmatter;
+pub(super) mod markdown_links;
 pub(super) mod oversized;
 pub(super) mod stale_build;
 pub(super) mod stale_refs;
