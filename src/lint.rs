@@ -176,6 +176,7 @@ fn lint_skill(
     diags.extend(check_stale_build(source, config, fragments_dir, skills_dir));
     diags.extend(check_oversized_skill(source, config));
     diags.extend(check_oversized_description(source, &raw, config));
+
     diags
 }
 
@@ -286,7 +287,7 @@ fn check_refs(
             "cmd" => {
                 let cmd = value.split_whitespace().next().unwrap_or(value);
                 let allowed = config.lint.allowed_commands.iter().any(|c| c == cmd);
-                if !allowed && !is_on_path(cmd) {
+                if !allowed && !workspace::is_on_path(cmd) {
                     diags.push(diag(
                         Severity::Warning,
                         &source.name,
@@ -360,7 +361,7 @@ fn check_stale_build(
 
     let expected = match crate::build::compile_to_string(source, config, fragments_dir, skills_dir)
     {
-        Ok(s) => s,
+        Ok((s, _)) => s,
         Err(e) => {
             return vec![diag(
                 Severity::Error,
@@ -569,13 +570,6 @@ fn classify_backtick(content: &str, all_sources: &[SkillSource]) -> Option<&'sta
 
 fn approx_tokens(text: &str) -> u32 {
     crate::tokens::approx_tokens(text)
-}
-
-fn is_on_path(cmd: &str) -> bool {
-    let Some(path_var) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path_var).any(|dir| dir.join(cmd).is_file())
 }
 
 fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {

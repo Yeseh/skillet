@@ -68,13 +68,14 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
 
 /// Compiles a skill source to a `String` without writing to disk or touching the lockfile.
 ///
+/// Returns the compiled content and the list of fragment names inlined.
 /// Used by `skillet lint` to verify that `SKILL.md` is up to date.
 pub fn compile_to_string(
     source: &SkillSource,
     config: &SkilletConfig,
     fragments_dir: &Path,
     skills_dir: &Path,
-) -> Result<String> {
+) -> Result<(String, Vec<String>)> {
     let raw = std::fs::read_to_string(&source.source_path)
         .with_context(|| format!("failed to read {}", source.source_path.display()))?;
 
@@ -89,9 +90,9 @@ pub fn compile_to_string(
         );
     }
 
-    let (processed_body, _fragments_used) = process_fragments(&body, fragments_dir)?;
+    let (processed_body, fragments_used) = process_fragments(&body, fragments_dir)?;
     let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_dir)?;
-    Ok(format!("---\n{}\n---\n{}", frontmatter, compiled_body))
+    Ok((format!("---\n{}\n---\n{}", frontmatter, compiled_body), fragments_used))
 }
 
 fn compile_skill(
@@ -101,13 +102,7 @@ fn compile_skill(
     skills_dir: &Path,
     lockfile: &mut Lockfile,
 ) -> Result<()> {
-    let output = compile_to_string(source, config, fragments_dir, skills_dir)?;
-    let (_, fragments_used) = {
-        // Re-parse to extract fragment list for lockfile (compile_to_string discards it)
-        let raw = std::fs::read_to_string(&source.source_path)?;
-        let (_fm, _name, body) = parse_source(&raw)?;
-        process_fragments(&body, fragments_dir)?
-    };
+    let (output, fragments_used) = compile_to_string(source, config, fragments_dir, skills_dir)?;
     let output_path = source.skill_dir.join("SKILL.md");
     std::fs::write(&output_path, &output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
@@ -217,7 +212,7 @@ fn process_refs(
             }
             "cmd" => {
                 let cmd = value.split_whitespace().next().unwrap_or(value);
-                if !is_on_path(cmd) {
+                if !workspace::is_on_path(cmd) {
                     eprintln!("warning: command '{}' not found on PATH", cmd);
                 }
                 result.push('`');
@@ -240,7 +235,11 @@ fn process_refs(
                 }
             },
             "env" => match config.env.get(value) {
-                Some(e) => result.push_str(&e.default),
+                Some(e) => {
+                    let resolved =
+                        std::env::var(value).unwrap_or_else(|_| e.default.clone());
+                    result.push_str(&resolved);
+                }
                 None => {
                     errors.push(format!("env '{}' not declared in [env]", value));
                     result.push_str(&caps[0]);
@@ -257,14 +256,6 @@ fn process_refs(
     }
 
     Ok(result)
-}
-
-/// Returns `true` if `cmd` is found as a file in any directory on `PATH`.
-fn is_on_path(cmd: &str) -> bool {
-    let Some(path_var) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path_var).any(|dir| dir.join(cmd).is_file())
 }
 
 /// Returns `"sha256:<hex>"` of the file at `path`.
@@ -394,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn process_refs_substitutes_env_default_without_backticks() {
+    fn process_refs_substitutes_env_without_backticks() {
         // Arrange
         let tmp = TempDir::new().unwrap();
         let config = SkilletConfig::default(); // env.CI.default = "false"
@@ -404,8 +395,9 @@ mod tests {
         let result =
             process_refs("ci: `env::CI`", tmp.path(), &config, &skills_dir).unwrap();
 
-        // Assert
-        assert_eq!(result, "ci: false");
+        // Assert — resolves to live env var or falls back to the configured default
+        let expected = std::env::var("CI").unwrap_or_else(|_| "false".to_string());
+        assert_eq!(result, format!("ci: {}", expected));
     }
 
     #[test]

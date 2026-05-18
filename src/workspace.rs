@@ -69,6 +69,14 @@ pub fn load_fragment(fragments_dir: &Path, name: &str) -> Result<String> {
     })
 }
 
+/// Returns `true` if `cmd` is found as a file in any directory on `PATH`.
+pub(crate) fn is_on_path(cmd: &str) -> bool {
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path_var).any(|dir| dir.join(cmd).is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

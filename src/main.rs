@@ -1,7 +1,15 @@
 #![allow(missing_docs)]
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Output format accepted by subcommands that support `--format`.
+#[derive(Clone, Default, ValueEnum)]
+enum FormatArg {
+    #[default]
+    Human,
+    Json,
+}
 
 #[derive(Parser)]
 #[command(name = "skillet", about = "Skill management CLI")]
@@ -32,9 +40,9 @@ enum Commands {
     Budget {
         /// Name of a single skill to show (shows all if omitted)
         name: Option<String>,
-        /// Output format: human (default) or json
+        /// Output format
         #[arg(long, default_value = "human")]
-        format: String,
+        format: FormatArg,
     },
     /// Check skills for quality issues
     Lint {
@@ -46,9 +54,9 @@ enum Commands {
         /// Show info-level diagnostics
         #[arg(long)]
         pedantic: bool,
-        /// Output format: human (default) or json
+        /// Output format
         #[arg(long, default_value = "human")]
-        format: String,
+        format: FormatArg,
     },
 }
 
@@ -69,17 +77,17 @@ fn main() -> Result<()> {
         }
         Commands::Budget { name, format } => {
             let cwd = std::env::current_dir()?;
-            let fmt = match format.as_str() {
-                "json" => skillet::budget::OutputFormat::Json,
-                _ => skillet::budget::OutputFormat::Human,
+            let fmt = match format {
+                FormatArg::Json => skillet::budget::OutputFormat::Json,
+                FormatArg::Human => skillet::budget::OutputFormat::Human,
             };
             skillet::budget::run(&cwd, name.as_deref(), fmt)?;
         }
         Commands::Lint { name, strict, pedantic, format } => {
             let cwd = std::env::current_dir()?;
-            let fmt = match format.as_str() {
-                "json" => skillet::lint::OutputFormat::Json,
-                _ => skillet::lint::OutputFormat::Human,
+            let fmt = match format {
+                FormatArg::Json => skillet::lint::OutputFormat::Json,
+                FormatArg::Human => skillet::lint::OutputFormat::Human,
             };
             let opts = skillet::lint::LintOptions::new(strict, pedantic, fmt);
             let clean = skillet::lint::run(&cwd, name.as_deref(), &opts)?;

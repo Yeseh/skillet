@@ -5,7 +5,7 @@
 /// This is intentionally a rough heuristic — the same one used by `skillet lint`
 /// and `skillet budget` so counts stay consistent across commands.
 pub fn approx_tokens(text: &str) -> u32 {
-    text.len().div_ceil(4) as u32
+    text.chars().count().div_ceil(4) as u32
 }
 
 #[cfg(test)]

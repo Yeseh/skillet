@@ -190,18 +190,35 @@ fn print_human(rows: &[BudgetRow]) {
     let w_disc = "Discovery".len();
     let w_act = "Activation".len();
     let w_trans = "Transitive".len();
+    let w_frags = rows
+        .iter()
+        .map(|r| {
+            if r.fragments.is_empty() {
+                0
+            } else {
+                r.fragments
+                    .iter()
+                    .map(|f| format!("{}({})", f.name, f.tokens).len())
+                    .sum::<usize>()
+                    + (r.fragments.len() - 1) * 2 // ", " separators
+            }
+        })
+        .max()
+        .unwrap_or(0)
+        .max("Fragments".len());
 
     // Header
     println!(
-        "{:<w_skill$}  {:>w_disc$}  {:>w_act$}  {:>w_trans$}  Fragments",
-        headers[0], headers[1], headers[2], headers[3],
+        "{:<w_skill$}  {:>w_disc$}  {:>w_act$}  {:>w_trans$}  {:<w_frags$}",
+        headers[0], headers[1], headers[2], headers[3], headers[4],
         w_skill = w_skill,
         w_disc = w_disc,
         w_act = w_act,
         w_trans = w_trans,
+        w_frags = w_frags,
     );
 
-    let sep_width = w_skill + 2 + w_disc + 2 + w_act + 2 + w_trans + 2 + 40;
+    let sep_width = w_skill + 2 + w_disc + 2 + w_act + 2 + w_trans + 2 + w_frags;
     println!("{}", "─".repeat(sep_width));
 
     let mut total_disc: u32 = 0;
