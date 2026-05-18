@@ -55,6 +55,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
     let config = config::load(workspace)?;
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
+    let fragments_dir = workspace.join(&config.workspace.fragments_dir);
     let sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
 
     // ── require a lockfile ─────────────────────────────────────────────────
@@ -129,6 +130,30 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
             }
         })
         .collect();
+
+    // ── verify fragment hashes against lockfile ──────────────────────────────
+    // If a fragment file has changed since the last build, mark all skills that
+    // include it as stale.  This runs even when there are no skills in `results`.
+    for (frag_name, frag_entry) in &lockfile.fragments {
+        let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
+        let reason = match hash_file(&frag_path) {
+            Err(_) => Some(format!(
+                "fragment '{frag_name}' is missing — run `skillet build`"
+            )),
+            Ok(current_hash) if current_hash != frag_entry.hash => Some(format!(
+                "fragment '{frag_name}' has changed since last build — run `skillet build`"
+            )),
+            Ok(_) => None,
+        };
+        if let Some(r) = reason {
+            for skill_name in &frag_entry.used_by {
+                if let Some(result) = results.iter_mut().find(|s| &s.name == skill_name) {
+                    result.fresh = false;
+                    result.reasons.push(r.clone());
+                }
+            }
+        }
+    }
 
     // ── flag lockfile entries whose source directory no longer exists ─────────
     // A skill removed from disk without rebuilding would otherwise appear fresh.
@@ -364,5 +389,43 @@ mod tests {
 
         // Assert — new skill not in lockfile → stale
         assert!(!ok);
+    }
+
+    #[test]
+    fn check_fails_when_fragment_edited_after_build() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let cfg = SkilletConfig::default();
+        fs::write(tmp.path().join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
+        fs::create_dir_all(tmp.path().join("src/skills/_fragments")).unwrap();
+        fs::create_dir_all(tmp.path().join("skills")).unwrap();
+
+        // Create a fragment and a skill that uses it
+        fs::write(
+            tmp.path().join("src/skills/_fragments/note.fragment.pan"),
+            "## Note\noriginal content\n",
+        )
+        .unwrap();
+        let skill_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("my-skill.pan"),
+            "---\nname: my-skill\ndescription: \"test\"\n---\n\n{{> note }}\n",
+        )
+        .unwrap();
+        crate::build::run(tmp.path(), None).unwrap();
+
+        // Edit the fragment without rebuilding
+        fs::write(
+            tmp.path().join("src/skills/_fragments/note.fragment.pan"),
+            "## Note\nmodified content\n",
+        )
+        .unwrap();
+
+        // Act
+        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+
+        // Assert — fragment changed → stale
+        assert!(!ok, "check should report stale when fragment has changed");
     }
 }

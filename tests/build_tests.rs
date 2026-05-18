@@ -94,3 +94,84 @@ fn build_expands_fragment_includes_in_output() {
     assert!(output.contains("fragment content here"));
     assert!(!output.contains("{{> note }}"));
 }
+
+#[test]
+fn build_errors_on_nested_fragment_include() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    // Create a fragment whose content itself contains an include directive
+    fs::write(
+        tmp.path().join("src/skills/_fragments/inner.fragment.pan"),
+        "## Inner\ninner content\n",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("src/skills/_fragments/outer.fragment.pan"),
+        "## Outer\n{{> inner }}\n",
+    )
+    .unwrap();
+
+    // Append a reference to the outer fragment in the skill source
+    let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
+    let mut source = fs::read_to_string(&source_path).unwrap();
+    source.push_str("\n{{> outer }}\n");
+    fs::write(&source_path, &source).unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    // Assert — build must fail with a message about nesting
+    assert!(
+        !out.status.success(),
+        "build should fail on nested fragment include"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("nested"),
+        "stderr should mention 'nested': {stderr}"
+    );
+}
+
+#[test]
+fn build_records_fragment_hash_in_lockfile() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    fs::write(
+        tmp.path().join("src/skills/_fragments/note.fragment.pan"),
+        "## Shared Note\ncontent\n",
+    )
+    .unwrap();
+    let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
+    let mut source = fs::read_to_string(&source_path).unwrap();
+    source.push_str("\n{{> note }}\n");
+    fs::write(&source_path, &source).unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Assert — lockfile should contain a [fragments.note] section with a hash
+    let lock = fs::read_to_string(tmp.path().join("skillet.lock")).unwrap();
+    assert!(
+        lock.contains("note"),
+        "lockfile should reference the 'note' fragment"
+    );
+    assert!(
+        lock.contains("sha256:"),
+        "lockfile should contain a sha256 hash for the fragment"
+    );
+    assert!(
+        lock.contains("my-skill"),
+        "lockfile fragments section should list 'my-skill' in used_by"
+    );
+}

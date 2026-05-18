@@ -1,7 +1,7 @@
 //! Compilation pipeline: `.pan` sources → `SKILL.md` output files.
 
 use crate::config::{self, SkilletConfig};
-use crate::lockfile::{LockMeta, Lockfile, SkillEntry};
+use crate::lockfile::{FragmentLockEntry, LockMeta, Lockfile, SkillEntry};
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -62,6 +62,8 @@ pub fn run(workspace: &Path, skill_name: Option<&str>) -> Result<()> {
         compile_skill(source, &config, &fragments_dir, &skills_src_dir, &mut lockfile)?;
         println!("built {}", source.name);
     }
+
+    rebuild_fragment_entries(&mut lockfile, &fragments_dir)?;
 
     crate::lockfile::write(workspace, &lockfile)?;
     Ok(())
@@ -168,6 +170,17 @@ fn process_fragments(body: &str, fragments_dir: &Path) -> Result<(String, Vec<St
         if let Some(caps) = FRAGMENT_RE.captures(line) {
             let frag_name = &caps[1];
             let content = workspace::load_fragment(fragments_dir, frag_name)?;
+            // Reject nested includes — keep fragment includes flat (v1 decision).
+            for (lineno, frag_line) in content.lines().enumerate() {
+                if FRAGMENT_RE.is_match(frag_line) {
+                    bail!(
+                        "fragment '{}' contains a nested fragment include on line {} — \
+                         nesting is not supported (keep includes flat)",
+                        frag_name,
+                        lineno + 1
+                    );
+                }
+            }
             if !fragments_used.iter().any(|f| f == frag_name) {
                 fragments_used.push(frag_name.to_string());
             }
@@ -259,6 +272,38 @@ fn process_refs(
     }
 
     Ok(result)
+}
+
+/// Rebuilds `lockfile.fragments` from the current `lockfile.skills` data.
+///
+/// Clears the existing entries, builds the `used_by` reverse-map from every
+/// skill's `fragments_used` list, then hashes each fragment file on disk.
+/// Sorting `used_by` alphabetically ensures deterministic lockfile output.
+fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Result<()> {
+    lockfile.fragments.clear();
+
+    // Reverse-map: fragment name → [skill names]
+    for (skill_name, entry) in &lockfile.skills {
+        for frag_name in &entry.fragments_used {
+            lockfile
+                .fragments
+                .entry(frag_name.clone())
+                .or_insert_with(FragmentLockEntry::default)
+                .used_by
+                .push(skill_name.clone());
+        }
+    }
+
+    // Hash each fragment file and sort used_by for deterministic output.
+    for (frag_name, frag_entry) in &mut lockfile.fragments {
+        let path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
+        if let Ok(h) = hash_file(&path) {
+            frag_entry.hash = h;
+        }
+        frag_entry.used_by.sort();
+    }
+
+    Ok(())
 }
 
 /// Returns `"sha256:<hex>"` of the file at `path`.
@@ -570,5 +615,108 @@ mod tests {
         assert!(output.contains("## Note"));
         assert!(output.contains("fragment content"));
         assert!(!output.contains("{{> note }}"));
+    }
+
+    // ── process_fragments: nested include detection ───────────────────────────
+
+    #[test]
+    fn process_fragments_errors_on_nested_include() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        // outer.fragment.pan contains a nested include directive
+        fs::write(
+            tmp.path().join("outer.fragment.pan"),
+            "## Outer\n{{> inner }}\n",
+        )
+        .unwrap();
+        let body = "{{> outer }}\n";
+
+        // Act
+        let result = process_fragments(body, tmp.path());
+
+        // Assert
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("nested"), "error should mention 'nested': {msg}");
+        assert!(msg.contains("outer"), "error should name the fragment: {msg}");
+    }
+
+    #[test]
+    fn process_fragments_allows_fragment_content_without_includes() {
+        // Arrange — fragment has backticks but no include directives
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("safe.fragment.pan"),
+            "use `cmd::ls`\n",
+        )
+        .unwrap();
+        let body = "{{> safe }}\n";
+
+        // Act
+        let result = process_fragments(body, tmp.path());
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    // ── rebuild_fragment_entries ─────────────────────────────────────────────
+
+    #[test]
+    fn rebuild_fragment_entries_populates_hash_and_used_by() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        init_workspace(tmp.path());
+        fs::write(
+            tmp.path().join("src/skills/_fragments/note.fragment.pan"),
+            "## Note\nfragment content\n",
+        )
+        .unwrap();
+        let skill_src_dir = tmp.path().join("src/skills/alpha");
+        fs::create_dir_all(&skill_src_dir).unwrap();
+        fs::write(
+            skill_src_dir.join("alpha.pan"),
+            "---\nname: alpha\ndescription: \"\"\n---\n\n{{> note }}\n",
+        )
+        .unwrap();
+
+        // Act
+        run(tmp.path(), Some("alpha")).unwrap();
+        let lf = crate::lockfile::read(tmp.path()).unwrap();
+
+        // Assert
+        let frag = lf.fragments.get("note").expect("'note' fragment entry missing");
+        assert!(!frag.hash.is_empty(), "fragment hash should be set");
+        assert!(frag.hash.starts_with("sha256:"), "hash should be sha256 prefixed");
+        assert_eq!(frag.used_by, vec!["alpha"], "used_by should list 'alpha'");
+    }
+
+    #[test]
+    fn rebuild_fragment_entries_lists_all_skills_for_shared_fragment() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        init_workspace(tmp.path());
+        fs::write(
+            tmp.path().join("src/skills/_fragments/shared.fragment.pan"),
+            "## Shared\ncontent\n",
+        )
+        .unwrap();
+        for skill in &["skill-a", "skill-b"] {
+            let dir = tmp.path().join("src/skills").join(skill);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join(format!("{skill}.pan")),
+                format!("---\nname: {skill}\ndescription: \"\"\n---\n\n{{{{> shared }}}}\n"),
+            )
+            .unwrap();
+        }
+
+        // Act
+        run(tmp.path(), None).unwrap();
+        let lf = crate::lockfile::read(tmp.path()).unwrap();
+
+        // Assert
+        let frag = lf.fragments.get("shared").expect("'shared' fragment entry missing");
+        assert!(frag.used_by.contains(&"skill-a".to_string()));
+        assert!(frag.used_by.contains(&"skill-b".to_string()));
     }
 }
