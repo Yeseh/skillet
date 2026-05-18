@@ -29,6 +29,20 @@ pub struct SkillResult {
     pub fresh: bool,
     /// Human-readable reasons this skill is considered stale (empty when fresh).
     pub reasons: Vec<String>,
+    /// Machine-readable difference entries (populated in JSON mode; empty when fresh).
+    pub diffs: Vec<DiffEntry>,
+}
+
+/// A single machine-readable staleness difference.
+#[derive(Debug, Serialize)]
+pub struct DiffEntry {
+    /// Kind of difference: `"source_changed"`, `"skill_md_missing"`,
+    /// `"skill_md_changed"`, `"fragment_changed"`, `"fragment_missing"`,
+    /// `"not_in_lockfile"`, `"source_dir_missing"`.
+    pub kind: String,
+    /// File or entity involved, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 /// Overall `check` output.
@@ -60,9 +74,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
     // ── require a lockfile ─────────────────────────────────────────────────
     let lock_path = workspace.join("skillet.lock");
     if !lock_path.exists() {
-        anyhow::bail!(
-            "skillet.lock not found — run `skillet build` to generate it"
-        );
+        anyhow::bail!("skillet.lock not found — run `skillet build` to generate it");
     }
     let lockfile = crate::lockfile::read(workspace)
         .with_context(|| format!("failed to read {}", lock_path.display()))?;
@@ -75,6 +87,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
         .iter()
         .map(|source| {
             let mut reasons: Vec<String> = Vec::new();
+            let mut diffs: Vec<DiffEntry> = Vec::new();
 
             match lockfile.skills.get(&source.name) {
                 None => {
@@ -82,6 +95,10 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                         "skill '{}' not in lockfile — run `skillet build`",
                         source.name
                     ));
+                    diffs.push(DiffEntry {
+                        kind: "not_in_lockfile".to_string(),
+                        file: None,
+                    });
                 }
                 Some(entry) => {
                     // Fast path: compare source hash.
@@ -89,14 +106,20 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                         Err(e) => reasons.push(format!("could not hash source: {}", e)),
                         Ok(current_source_hash) => {
                             if current_source_hash != entry.source_hash {
+                                let fname = source
+                                    .source_path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string();
                                 reasons.push(format!(
                                     "source '{}' has changed since last build",
-                                    source
-                                        .source_path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
+                                    fname
                                 ));
+                                diffs.push(DiffEntry {
+                                    kind: "source_changed".to_string(),
+                                    file: Some(source.source_path.to_string_lossy().to_string()),
+                                });
                             }
                         }
                     }
@@ -105,6 +128,10 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                     let skill_md = source.skill_out_dir.join("SKILL.md");
                     if !skill_md.exists() {
                         reasons.push("SKILL.md is missing — run `skillet build`".to_string());
+                        diffs.push(DiffEntry {
+                            kind: "skill_md_missing".to_string(),
+                            file: Some(skill_md.to_string_lossy().to_string()),
+                        });
                     } else {
                         match workspace::hash_file(&skill_md) {
                             Err(e) => reasons.push(format!("could not hash SKILL.md: {}", e)),
@@ -114,6 +141,10 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                                         "SKILL.md does not match last build — run `skillet build`"
                                             .to_string(),
                                     );
+                                    diffs.push(DiffEntry {
+                                        kind: "skill_md_changed".to_string(),
+                                        file: Some(skill_md.to_string_lossy().to_string()),
+                                    });
                                 }
                             }
                         }
@@ -126,6 +157,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                 name: source.name.clone(),
                 fresh,
                 reasons,
+                diffs,
             }
         })
         .collect();
@@ -135,20 +167,30 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
     // include it as stale.  This runs even when there are no skills in `results`.
     for (frag_name, frag_entry) in &lockfile.fragments {
         let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        let reason = match workspace::hash_file(&frag_path) {
-            Err(_) => Some(format!(
-                "fragment '{frag_name}' is missing — run `skillet build`"
-            )),
-            Ok(current_hash) if current_hash != frag_entry.hash => Some(format!(
-                "fragment '{frag_name}' has changed since last build — run `skillet build`"
-            )),
-            Ok(_) => None,
+        let (reason, diff_kind) = match workspace::hash_file(&frag_path) {
+            Err(_) => (
+                Some(format!(
+                    "fragment '{frag_name}' is missing — run `skillet build`"
+                )),
+                Some("fragment_missing"),
+            ),
+            Ok(current_hash) if current_hash != frag_entry.hash => (
+                Some(format!(
+                    "fragment '{frag_name}' has changed since last build — run `skillet build`"
+                )),
+                Some("fragment_changed"),
+            ),
+            Ok(_) => (None, None),
         };
-        if let Some(r) = reason {
+        if let (Some(r), Some(dk)) = (reason, diff_kind) {
             for skill_name in &frag_entry.used_by {
                 if let Some(result) = results.iter_mut().find(|s| &s.name == skill_name) {
                     result.fresh = false;
                     result.reasons.push(r.clone());
+                    result.diffs.push(DiffEntry {
+                        kind: dk.to_string(),
+                        file: Some(frag_path.to_string_lossy().to_string()),
+                    });
                 }
             }
         }
@@ -166,6 +208,10 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
                      — run `skillet build`",
                     locked_name
                 )],
+                diffs: vec![DiffEntry {
+                    kind: "source_dir_missing".to_string(),
+                    file: None,
+                }],
             });
         }
     }

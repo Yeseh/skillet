@@ -78,7 +78,10 @@ pub fn load_fragment(fragments_dir: &Path, name: &str) -> Result<String> {
 pub(crate) fn hash_file(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read {} for hashing", path.display()))?;
-    Ok(format!("sha256:{}", hex::encode(sha2::Sha256::digest(&bytes))))
+    Ok(format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(&bytes))
+    ))
 }
 
 /// Returns `true` if `cmd` is found as a file in any directory on `PATH`.
@@ -146,7 +149,11 @@ mod tests {
     fn load_fragment_reads_dot_fragment_pan_file() {
         // Arrange
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("check-adrs.fragment.pan"), "## Check ADRs\n").unwrap();
+        fs::write(
+            tmp.path().join("check-adrs.fragment.pan"),
+            "## Check ADRs\n",
+        )
+        .unwrap();
 
         // Act
         let content = load_fragment(tmp.path(), "check-adrs").unwrap();

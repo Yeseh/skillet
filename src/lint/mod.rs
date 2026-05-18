@@ -38,6 +38,18 @@ pub struct Diagnostic {
     pub skill: String,
     /// Human-readable description of the problem.
     pub message: String,
+    /// File path where the issue was found (when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 1-based line number where the issue was found (when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// The duplicated passage text (duplication rule only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duplicated_text: Option<String>,
+    /// Skill names that share the duplicated passage (duplication rule only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected_skills: Option<Vec<String>>,
 }
 
 /// Output format for lint results.
@@ -65,7 +77,11 @@ pub struct LintOptions {
 impl LintOptions {
     /// Creates a new `LintOptions` with all options specified.
     pub fn new(strict: bool, pedantic: bool, format: OutputFormat) -> Self {
-        Self { strict, pedantic, format }
+        Self {
+            strict,
+            pedantic,
+            format,
+        }
     }
 }
 
@@ -164,10 +180,26 @@ fn lint_skill(
     };
 
     diags.extend(rules::invalid_frontmatter::check(source, &raw, config));
-    diags.extend(rules::stale_refs::check(source, &raw, config, all_sources, skills_src_dir));
+    diags.extend(rules::stale_refs::check(
+        source,
+        &raw,
+        config,
+        all_sources,
+        skills_src_dir,
+    ));
     diags.extend(rules::markdown_links::check(source, &raw, config));
-    diags.extend(rules::untyped_backtick::check(source, &raw, all_sources, config));
-    diags.extend(rules::stale_build::check(source, config, fragments_dir, skills_src_dir));
+    diags.extend(rules::untyped_backtick::check(
+        source,
+        &raw,
+        all_sources,
+        config,
+    ));
+    diags.extend(rules::stale_build::check(
+        source,
+        config,
+        fragments_dir,
+        skills_src_dir,
+    ));
     diags.extend(rules::oversized::check_skill(source, config));
     diags.extend(rules::oversized::check_description(source, &raw, config));
 
@@ -182,9 +214,13 @@ fn lint_workspace(
     fragments_dir: &Path,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
-    diags.extend(rules::unused_fragment::check(all_sources, fragments_dir, config));
+    diags.extend(rules::unused_fragment::check(
+        all_sources,
+        fragments_dir,
+        config,
+    ));
     diags.extend(rules::oversized::check_fragments(config, fragments_dir));
-    // duplication: not yet implemented (planned for a future story)
+    diags.extend(rules::duplication::check(all_sources));
     diags
 }
 
@@ -196,6 +232,30 @@ pub(crate) fn diag(severity: Severity, skill: &str, rule: &str, message: String)
         severity,
         skill: skill.to_string(),
         message,
+        path: None,
+        line: None,
+        duplicated_text: None,
+        affected_skills: None,
+    }
+}
+
+pub(crate) fn diag_located(
+    severity: Severity,
+    skill: &str,
+    rule: &str,
+    message: String,
+    path: Option<String>,
+    line: Option<u32>,
+) -> Diagnostic {
+    Diagnostic {
+        rule: rule.to_string(),
+        severity,
+        skill: skill.to_string(),
+        message,
+        path,
+        line,
+        duplicated_text: None,
+        affected_skills: None,
     }
 }
 
@@ -214,8 +274,14 @@ fn print_human(diagnostics: &[Diagnostic]) {
         };
         println!("[{tag}] {} ({}): {}", d.skill, d.rule, d.message);
     }
-    let errors = diagnostics.iter().filter(|d| d.severity == Severity::Error).count();
-    let warnings = diagnostics.iter().filter(|d| d.severity == Severity::Warning).count();
+    let errors = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .count();
+    let warnings = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .count();
     println!("\n{} error(s), {} warning(s)", errors, warnings);
 }
 
@@ -239,7 +305,12 @@ mod tests {
         let source_path = skill_dir.join(format!("{name}.pan"));
         fs::write(&source_path, content).unwrap();
         let skill_out_dir = dir.join("skills").join(name);
-        SkillSource { name: name.to_string(), source_path, skill_dir, skill_out_dir }
+        SkillSource {
+            name: name.to_string(),
+            source_path,
+            skill_dir,
+            skill_out_dir,
+        }
     }
 
     fn init_workspace(dir: &Path) {
@@ -291,7 +362,9 @@ mod tests {
         );
 
         // Assert
-        assert!(diags.iter().any(|d| d.rule == "invalid-frontmatter" && d.severity == Severity::Error));
+        assert!(diags
+            .iter()
+            .any(|d| d.rule == "invalid-frontmatter" && d.severity == Severity::Error));
     }
 
     #[test]
@@ -493,7 +566,9 @@ mod tests {
         let diags = rules::unused_fragment::check(&[], tmp.path(), &config);
 
         // Assert
-        assert!(diags.iter().any(|d| d.rule == "unused-fragment" && d.message.contains("unused")));
+        assert!(diags
+            .iter()
+            .any(|d| d.rule == "unused-fragment" && d.message.contains("unused")));
     }
 
     #[test]
@@ -504,7 +579,11 @@ mod tests {
         let skill_dir = tmp.path().join("src/skills/diagnose");
         fs::create_dir_all(&skill_dir).unwrap();
         let source_path = skill_dir.join("diagnose.pan");
-        fs::write(&source_path, "---\nname: diagnose\ndescription: x\n---\n\n{{> note }}\n").unwrap();
+        fs::write(
+            &source_path,
+            "---\nname: diagnose\ndescription: x\n---\n\n{{> note }}\n",
+        )
+        .unwrap();
         let sources = vec![SkillSource {
             name: "diagnose".into(),
             source_path,
@@ -577,8 +656,14 @@ mod tests {
         .unwrap();
         crate::build::run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
 
-        let opts_normal = LintOptions { strict: false, ..Default::default() };
-        let opts_strict = LintOptions { strict: true, ..Default::default() };
+        let opts_normal = LintOptions {
+            strict: false,
+            ..Default::default()
+        };
+        let opts_strict = LintOptions {
+            strict: true,
+            ..Default::default()
+        };
 
         // Act — normal should be clean (no warnings either in this case)
         let clean_normal = run(tmp.path(), None, &opts_normal).unwrap();

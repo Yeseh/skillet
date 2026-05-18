@@ -27,8 +27,39 @@ pub struct LockMeta {
 pub struct FragmentLockEntry {
     /// SHA-256 hex digest of the fragment source file.
     pub hash: String,
+    /// Approximate token count for this fragment's source.
+    #[serde(default)]
+    pub tokens: u32,
     /// Skill names that include this fragment, sorted alphabetically.
     pub used_by: Vec<String>,
+}
+
+/// Structured per-skill refs recorded in the lockfile.
+#[non_exhaustive]
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SkillRefs {
+    /// Markdown path link targets and `ref::` paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    /// `cmd::` command references.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+    /// `skill::` cross-skill references.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// URL link targets (http/https).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub urls: Vec<String>,
+}
+
+impl SkillRefs {
+    /// Returns `true` when all ref lists are empty.
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+            && self.commands.is_empty()
+            && self.skills.is_empty()
+            && self.urls.is_empty()
+    }
 }
 
 /// Per-skill entry in the lockfile.
@@ -39,12 +70,20 @@ pub struct SkillEntry {
     pub source_hash: String,
     /// SHA-256 hex digest of the compiled `SKILL.md` output.
     pub compiled_hash: String,
+    /// Tokens for `name` + `description` (discovery cost).
+    #[serde(default)]
+    pub discovery_tokens: u32,
+    /// Tokens for the full compiled `SKILL.md` (activation cost).
+    #[serde(default)]
+    pub activation_tokens: u32,
+    /// Activation tokens + tokens for files linked via `ref::` (transitive cost).
+    #[serde(default)]
+    pub transitive_tokens: u32,
     /// Names of fragments inlined during compilation.
     pub fragments_used: Vec<String>,
-    /// All detected refs in the form `"kind::value"` (Layer 1 paths as `"path::value"`,
-    /// Layer 1 URLs as `"url::value"`, Layer 2 typed refs as `"kind::value"`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub refs: Vec<String>,
+    /// Structured refs detected in the compiled output.
+    #[serde(default, skip_serializing_if = "SkillRefs::is_empty")]
+    pub refs: SkillRefs,
 }
 
 /// The full contents of `skillet.lock`.
@@ -94,25 +133,34 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_lockfile() -> Lockfile {
-        let mut lf = Lockfile::default();
-        lf.meta = Some(LockMeta {
-            skillet_version: "0.1.0".into(),
-            built_at: "2026-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap(),
-            tokenizer: "cl100k_base".into(),
-        });
+        let mut lf = Lockfile {
+            meta: Some(LockMeta {
+                skillet_version: "0.1.0".into(),
+                built_at: "2026-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+                tokenizer: "cl100k_base".into(),
+            }),
+            ..Default::default()
+        };
         lf.skills.insert(
             "diagnose".into(),
             SkillEntry {
                 source_hash: "sha256:abc".into(),
                 compiled_hash: "sha256:def".into(),
+                discovery_tokens: 10,
+                activation_tokens: 100,
+                transitive_tokens: 150,
                 fragments_used: vec!["check-adrs".into()],
-                refs: vec![],
+                refs: SkillRefs {
+                    commands: vec!["git".into()],
+                    ..Default::default()
+                },
             },
         );
         lf.fragments.insert(
             "check-adrs".into(),
             FragmentLockEntry {
                 hash: "sha256:ff00".into(),
+                tokens: 42,
                 used_by: vec!["diagnose".into()],
             },
         );
@@ -136,8 +184,13 @@ mod tests {
         let skill = loaded.skills.get("diagnose").unwrap();
         assert_eq!(skill.source_hash, "sha256:abc");
         assert_eq!(skill.fragments_used, vec!["check-adrs"]);
+        assert_eq!(skill.discovery_tokens, 10);
+        assert_eq!(skill.activation_tokens, 100);
+        assert_eq!(skill.transitive_tokens, 150);
+        assert_eq!(skill.refs.commands, vec!["git"]);
         let frag = loaded.fragments.get("check-adrs").unwrap();
         assert_eq!(frag.hash, "sha256:ff00");
+        assert_eq!(frag.tokens, 42);
         assert_eq!(frag.used_by, vec!["diagnose"]);
     }
 
@@ -165,7 +218,10 @@ mod tests {
         let content = std::fs::read_to_string(tmp.path().join("skillet.lock")).unwrap();
 
         // Assert
-        assert!(!content.contains("[fragments]"), "fragments section should be omitted when empty");
+        assert!(
+            !content.contains("[fragments]"),
+            "fragments section should be omitted when empty"
+        );
     }
 
     #[test]
@@ -179,5 +235,27 @@ mod tests {
         // Assert
         assert!(lf.meta.is_none());
         assert!(lf.skills.is_empty());
+    }
+
+    #[test]
+    fn write_then_read_preserves_token_fields_and_structured_refs() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let original = make_lockfile();
+
+        // Act
+        write(tmp.path(), &original).unwrap();
+        let loaded = read(tmp.path()).unwrap();
+
+        // Assert
+        let skill = loaded.skills.get("diagnose").unwrap();
+        assert_eq!(skill.discovery_tokens, 10);
+        assert_eq!(skill.activation_tokens, 100);
+        assert_eq!(skill.transitive_tokens, 150);
+        assert_eq!(skill.refs.commands, vec!["git"]);
+        assert!(skill.refs.paths.is_empty());
+        assert!(skill.refs.urls.is_empty());
+        let frag = loaded.fragments.get("check-adrs").unwrap();
+        assert_eq!(frag.tokens, 42);
     }
 }

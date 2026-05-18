@@ -13,8 +13,7 @@ pub(crate) static TYPED_REF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap());
 
 /// Matches `ref::` path directives only (used for transitive cost calculation).
-static PATH_REF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`ref::([^`]+)`").unwrap());
+static PATH_REF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`ref::([^`]+)`").unwrap());
 
 /// Matches any backtick-enclosed content that is not a typed ref directive.
 pub(crate) static UNTYPED_BACKTICK_RE: LazyLock<Regex> =
@@ -45,9 +44,12 @@ pub fn extract_markdown_links(text: &str) -> Vec<MarkdownLink> {
         .captures_iter(text)
         .map(|caps| {
             let target = caps[2].trim().to_string();
-            let is_url =
-                target.starts_with("http://") || target.starts_with("https://");
-            MarkdownLink { text: caps[1].to_string(), target, is_url }
+            let is_url = target.starts_with("http://") || target.starts_with("https://");
+            MarkdownLink {
+                text: caps[1].to_string(),
+                target,
+                is_url,
+            }
         })
         .collect()
 }
@@ -67,7 +69,7 @@ pub fn extract_path_refs(text: &str) -> Vec<String> {
 /// Returns a short type label (`"path"`, `"url"`, `"skill"`, `"command"`) when
 /// the content looks like a recognisable ref type, or `None` when it cannot be
 /// classified.  The label doubles as the suggested ref prefix in lint messages.
-pub fn classify_untyped<'a>(content: &str, skill_names: &[&'a str]) -> Option<&'static str> {
+pub fn classify_untyped(content: &str, skill_names: &[&str]) -> Option<&'static str> {
     if content.starts_with("http://") || content.starts_with("https://") {
         return Some("url");
     }
@@ -84,7 +86,9 @@ pub fn classify_untyped<'a>(content: &str, skill_names: &[&'a str]) -> Option<&'
     let parts: Vec<&str> = content.split_whitespace().collect();
     if parts.len() >= 2 {
         let cmd = parts[0];
-        let is_cmd_like = cmd.chars().all(|c| c.is_lowercase() || c == '-' || c == '_');
+        let is_cmd_like = cmd
+            .chars()
+            .all(|c| c.is_lowercase() || c == '-' || c == '_');
         let has_flag = parts[1..].iter().any(|p| p.starts_with('-'));
         if is_cmd_like && has_flag {
             return Some("command");

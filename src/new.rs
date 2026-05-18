@@ -1,7 +1,15 @@
 //! `skillet new` — scaffold a new skill source inside an initialized workspace.
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::path::Path;
+
+/// Report produced by `new` in JSON mode.
+#[derive(Debug, Serialize)]
+pub struct NewReport {
+    /// Path to the created skill source file.
+    pub created: String,
+}
 
 /// Renders the minimal `.skill` scaffold for a skill named `name`.
 pub fn scaffold_content(name: &str) -> String {
@@ -10,8 +18,8 @@ pub fn scaffold_content(name: &str) -> String {
 
 /// Scaffolds a new skill source at `<skills_src_dir>/<name>/<name>.pan`.
 ///
-/// Returns an error if the workspace is not initialized or if the skill already exists.
-pub fn run(workspace: &Path, name: &str) -> Result<()> {
+/// When `json` is `true`, prints a JSON report to stdout.
+pub fn run(workspace: &Path, name: &str, json: bool) -> Result<()> {
     let config = crate::config::load(workspace)?;
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skill_dir = skills_src_dir.join(name);
@@ -27,15 +35,22 @@ pub fn run(workspace: &Path, name: &str) -> Result<()> {
     std::fs::write(&skill_file, scaffold_content(name))
         .with_context(|| format!("failed to write {}", skill_file.display()))?;
 
-    println!("created {}", skill_file.display());
+    if json {
+        let report = NewReport {
+            created: skill_file.to_string_lossy().to_string(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("created {}", skill_file.display());
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use crate::config::SkilletConfig;
+    use std::fs;
     use tempfile::TempDir;
 
     fn init_workspace(dir: &Path) {
@@ -73,7 +88,7 @@ mod tests {
         init_workspace(tmp.path());
 
         // Act
-        run(tmp.path(), "my-skill").unwrap();
+        run(tmp.path(), "my-skill", false).unwrap();
 
         // Assert
         let skill_file = tmp.path().join("src/skills/my-skill/my-skill.pan");
@@ -87,10 +102,10 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        run(tmp.path(), "dupe").unwrap();
+        run(tmp.path(), "dupe", false).unwrap();
 
         // Act
-        let result = run(tmp.path(), "dupe");
+        let result = run(tmp.path(), "dupe", false);
 
         // Assert
         assert!(result.is_err(), "should fail on duplicate");
@@ -108,7 +123,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         // Act
-        let result = run(tmp.path(), "some-skill");
+        let result = run(tmp.path(), "some-skill", false);
 
         // Assert
         assert!(result.is_err(), "should fail without skillet.toml");

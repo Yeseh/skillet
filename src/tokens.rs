@@ -1,7 +1,7 @@
 //! Token-counting utilities backed by tiktoken-rs.
 
-use tiktoken_rs::tokenizer::Tokenizer;
 use tiktoken_rs::bpe_for_tokenizer;
+use tiktoken_rs::tokenizer::Tokenizer;
 
 /// Returns the number of tokens in `text` using the given tiktoken encoding name
 /// (e.g. `"cl100k_base"`, `"o200k_base"`).

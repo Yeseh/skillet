@@ -67,7 +67,12 @@ mod tests {
         let source_path = skill_dir.join(format!("{name}.pan"));
         fs::write(&source_path, content).unwrap();
         let skill_out_dir = dir.join("skills").join(name);
-        SkillSource { name: name.to_string(), source_path, skill_dir, skill_out_dir }
+        SkillSource {
+            name: name.to_string(),
+            source_path,
+            skill_dir,
+            skill_out_dir,
+        }
     }
 
     #[test]
@@ -83,7 +88,11 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check(&src, &fs::read_to_string(&src.source_path).unwrap(), &config);
+        let diags = check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+        );
 
         // Assert
         assert!(diags.is_empty());
@@ -101,7 +110,11 @@ mod tests {
         let config = SkilletConfig::default();
 
         // Act
-        let diags = check(&src, &fs::read_to_string(&src.source_path).unwrap(), &config);
+        let diags = check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+        );
 
         // Assert
         assert!(diags.iter().any(|d| d.rule == "stale-markdown-link"));
@@ -119,7 +132,11 @@ mod tests {
         let config = SkilletConfig::default(); // verify_urls = false
 
         // Act
-        let diags = check(&src, &fs::read_to_string(&src.source_path).unwrap(), &config);
+        let diags = check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+        );
 
         // Assert
         assert!(diags.is_empty());
@@ -138,9 +155,15 @@ mod tests {
         config.build.verify_urls = true;
 
         // Act
-        let diags = check(&src, &fs::read_to_string(&src.source_path).unwrap(), &config);
+        let diags = check(
+            &src,
+            &fs::read_to_string(&src.source_path).unwrap(),
+            &config,
+        );
 
         // Assert
-        assert!(diags.iter().any(|d| d.rule == "unverified-url-link" && d.severity == Severity::Info));
+        assert!(diags
+            .iter()
+            .any(|d| d.rule == "unverified-url-link" && d.severity == Severity::Info));
     }
 }

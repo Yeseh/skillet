@@ -25,11 +25,17 @@ enum Commands {
         /// Adopt existing SKILL.md files as .skill sources
         #[arg(long)]
         adopt: bool,
+        /// Output format
+        #[arg(long, default_value = "human")]
+        format: FormatArg,
     },
     /// Scaffold a new skill source in the current workspace
     New {
         /// Name of the skill to create
         name: String,
+        /// Output format
+        #[arg(long, default_value = "human")]
+        format: FormatArg,
     },
     /// Compile .skill sources to SKILL.md output files
     Build {
@@ -41,6 +47,9 @@ enum Commands {
         /// Promote URL-check warnings to errors
         #[arg(long)]
         strict: bool,
+        /// Output format
+        #[arg(long, default_value = "human")]
+        format: FormatArg,
     },
     /// Show token budget for skills in the workspace
     Budget {
@@ -75,17 +84,28 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Init { adopt } => {
+        Commands::Init { adopt, format } => {
             let cwd = std::env::current_dir()?;
-            skillet::init::run(&cwd, adopt)?;
+            let json = matches!(format, FormatArg::Json);
+            skillet::init::run(&cwd, adopt, json)?;
         }
-        Commands::New { name } => {
+        Commands::New { name, format } => {
             let cwd = std::env::current_dir()?;
-            skillet::new::run(&cwd, &name)?;
+            let json = matches!(format, FormatArg::Json);
+            skillet::new::run(&cwd, &name, json)?;
         }
-        Commands::Build { name, offline, strict } => {
+        Commands::Build {
+            name,
+            offline,
+            strict,
+            format,
+        } => {
             let cwd = std::env::current_dir()?;
-            let opts = skillet::build::BuildOptions::new(offline, strict);
+            let fmt = match format {
+                FormatArg::Json => skillet::build::OutputFormat::Json,
+                FormatArg::Human => skillet::build::OutputFormat::Human,
+            };
+            let opts = skillet::build::BuildOptions::new_with_format(offline, strict, fmt);
             skillet::build::run(&cwd, name.as_deref(), &opts)?;
         }
         Commands::Check { format } => {
@@ -107,7 +127,12 @@ fn main() -> Result<()> {
             };
             skillet::budget::run(&cwd, name.as_deref(), fmt)?;
         }
-        Commands::Lint { name, strict, pedantic, format } => {
+        Commands::Lint {
+            name,
+            strict,
+            pedantic,
+            format,
+        } => {
             let cwd = std::env::current_dir()?;
             let fmt = match format {
                 FormatArg::Json => skillet::lint::OutputFormat::Json,

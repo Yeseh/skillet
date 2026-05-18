@@ -1,21 +1,23 @@
 //! Workspace initialisation logic.
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::path::Path;
 use walkdir::WalkDir;
 
+/// Report produced by `init` in JSON mode.
+#[derive(Debug, Serialize)]
+pub struct InitReport {
+    /// Directories created during init.
+    pub created_dirs: Vec<String>,
+    /// Path to the written `skillet.toml`.
+    pub config_path: String,
+}
+
 /// Initialises a new skillet workspace at `workspace`.
 ///
-/// Creates the `src/skills/`, `src/skills/_fragments/`, and `skills/` directories
-/// and writes a default `skillet.toml`.  If `adopt` is `true`, any `SKILL.md` files
-/// found directly inside `skills/<name>/` subdirectories are copied into
-/// `src/skills/<name>/` as `<name>.pan` source files.
-///
-/// # Errors
-///
-/// Returns an error if `skillet.toml` already exists, or if any filesystem
-/// operation fails.
-pub fn run(workspace: &Path, adopt: bool) -> Result<()> {
+/// When `json` is `true`, prints a JSON report to stdout instead of silence.
+pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
     let config_path = workspace.join("skillet.toml");
 
     if config_path.exists() {
@@ -40,6 +42,18 @@ pub fn run(workspace: &Path, adopt: bool) -> Result<()> {
     std::fs::create_dir_all(&fragments_dir).context("failed to create fragments dir")?;
 
     std::fs::write(&config_path, &default_cfg).context("failed to write skillet.toml")?;
+
+    if json {
+        let report = InitReport {
+            created_dirs: vec![
+                skills_src_dir.to_string_lossy().to_string(),
+                skills_out_dir.to_string_lossy().to_string(),
+                fragments_dir.to_string_lossy().to_string(),
+            ],
+            config_path: config_path.to_string_lossy().to_string(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    }
 
     Ok(())
 }
@@ -137,7 +151,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         // Act
-        run(tmp.path(), false).unwrap();
+        run(tmp.path(), false, false).unwrap();
 
         // Assert
         assert!(tmp.path().join("src/skills").is_dir());
@@ -153,7 +167,7 @@ mod tests {
         fs::write(tmp.path().join("skillet.toml"), "existing = true").unwrap();
 
         // Act
-        let result = run(tmp.path(), false);
+        let result = run(tmp.path(), false, false);
 
         // Assert
         assert!(result.is_err());

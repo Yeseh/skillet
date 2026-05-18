@@ -1,14 +1,14 @@
 //! Compilation pipeline: `.pan` sources → `SKILL.md` output files.
 
 use crate::config::{self, SkilletConfig};
-use crate::lockfile::{FragmentLockEntry, LockMeta, Lockfile, SkillEntry};
+use crate::lockfile::{LockMeta, Lockfile, SkillEntry, SkillRefs};
 use crate::refs::{extract_markdown_links, TYPED_REF_RE};
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use gray_matter::{engine::YAML, Matter};
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -25,13 +25,49 @@ pub struct BuildOptions {
     /// Promote URL-check warnings to errors (build fails if any URL is broken
     /// or unreachable).
     pub strict: bool,
+    /// Output format.
+    pub format: OutputFormat,
 }
 
 impl BuildOptions {
     /// Creates a new `BuildOptions` with both flags specified.
     pub fn new(offline: bool, strict: bool) -> Self {
-        Self { offline, strict }
+        Self {
+            offline,
+            strict,
+            format: OutputFormat::Human,
+        }
     }
+
+    /// Creates a new `BuildOptions` with all fields specified.
+    pub fn new_with_format(offline: bool, strict: bool, format: OutputFormat) -> Self {
+        Self {
+            offline,
+            strict,
+            format,
+        }
+    }
+}
+
+/// Output format for build results.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Human-readable output (default).
+    #[default]
+    Human,
+    /// Machine-parseable JSON.
+    Json,
+}
+
+/// Structured report produced by a build run.
+#[derive(Debug, Serialize)]
+pub struct BuildReport {
+    /// Names of skills that were compiled successfully.
+    pub skills_built: Vec<String>,
+    /// Warning messages encountered during the build (URL checks, missing commands).
+    pub warnings: Vec<String>,
+    /// Path to the written `skillet.lock` file.
+    pub lockfile_path: String,
 }
 
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
@@ -68,7 +104,16 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &BuildOptions) -> R
     };
 
     if targets.is_empty() {
-        eprintln!("no skills found in {}", skills_src_dir.display());
+        if opts.format == OutputFormat::Json {
+            let report = BuildReport {
+                skills_built: vec![],
+                warnings: vec![],
+                lockfile_path: workspace.join("skillet.lock").to_string_lossy().to_string(),
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            eprintln!("no skills found in {}", skills_src_dir.display());
+        }
         return Ok(());
     }
 
@@ -79,18 +124,45 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &BuildOptions) -> R
         tokenizer: config.build.tokenizer.clone(),
     });
 
+    let mut skills_built: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
     for source in &targets {
-        compile_skill(source, &config, &fragments_dir, &skills_src_dir, &mut lockfile)?;
-        println!("built {}", source.name);
+        compile_skill(
+            source,
+            &config,
+            &fragments_dir,
+            &skills_src_dir,
+            &mut lockfile,
+        )?;
+        if opts.format == OutputFormat::Human {
+            println!("built {}", source.name);
+        }
+        skills_built.push(source.name.clone());
     }
 
-    rebuild_fragment_entries(&mut lockfile, &fragments_dir)?;
+    rebuild_fragment_entries(&mut lockfile, &fragments_dir, &config.build.tokenizer)?;
 
+    let lock_path = workspace.join("skillet.lock");
     crate::lockfile::write(workspace, &lockfile)?;
 
     // URL verification (opt-in via config, suppressible with --offline).
     if config.build.verify_urls && !opts.offline {
-        verify_urls_from_lockfile(&lockfile, opts.strict)?;
+        verify_urls_from_lockfile(
+            &lockfile,
+            opts.strict,
+            &mut warnings,
+            opts.format == OutputFormat::Human,
+        )?;
+    }
+
+    if opts.format == OutputFormat::Json {
+        let report = BuildReport {
+            skills_built,
+            warnings,
+            lockfile_path: lock_path.to_string_lossy().to_string(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
     }
 
     Ok(())
@@ -98,15 +170,19 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &BuildOptions) -> R
 
 /// Collects all `url::` refs from the lockfile, verifies them, and prints
 /// results.  Returns `Ok(())` unless `strict` is set and any URL failed.
-fn verify_urls_from_lockfile(lockfile: &crate::lockfile::Lockfile, strict: bool) -> Result<()> {
-    use crate::net::url_verify::{UrlCheckResult, verify_urls};
+fn verify_urls_from_lockfile(
+    lockfile: &crate::lockfile::Lockfile,
+    strict: bool,
+    warnings: &mut Vec<String>,
+    human: bool,
+) -> Result<()> {
+    use crate::net::url_verify::{verify_urls, UrlCheckResult};
     use owo_colors::OwoColorize;
 
     let urls: Vec<String> = lockfile
         .skills
         .values()
-        .flat_map(|e| e.refs.iter())
-        .filter_map(|r| r.strip_prefix("url::").map(str::to_string))
+        .flat_map(|e| e.refs.urls.iter().cloned())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
@@ -115,7 +191,9 @@ fn verify_urls_from_lockfile(lockfile: &crate::lockfile::Lockfile, strict: bool)
         return Ok(());
     }
 
-    println!("checking {} URL(s)…", urls.len());
+    if human {
+        println!("checking {} URL(s)…", urls.len());
+    }
     let outcomes = verify_urls(&urls);
 
     let mut had_error = false;
@@ -123,38 +201,54 @@ fn verify_urls_from_lockfile(lockfile: &crate::lockfile::Lockfile, strict: bool)
         match &outcome.result {
             UrlCheckResult::Ok => {}
             UrlCheckResult::Broken(code) => {
-                eprintln!(
-                    "{} {} ({})",
-                    "warning[broken-url]:".yellow(),
-                    outcome.url,
-                    code
-                );
+                let msg = format!("broken-url: {} ({})", outcome.url, code);
+                warnings.push(msg);
+                if human {
+                    eprintln!(
+                        "{} {} ({})",
+                        "warning[broken-url]:".yellow(),
+                        outcome.url,
+                        code
+                    );
+                }
                 had_error = true;
             }
             UrlCheckResult::PossiblyDown(code) => {
-                eprintln!(
-                    "{} {} ({})",
-                    "info[url-possibly-down]:".cyan(),
-                    outcome.url,
-                    code
-                );
+                let msg = format!("url-possibly-down: {} ({})", outcome.url, code);
+                warnings.push(msg);
+                if human {
+                    eprintln!(
+                        "{} {} ({})",
+                        "info[url-possibly-down]:".cyan(),
+                        outcome.url,
+                        code
+                    );
+                }
             }
             UrlCheckResult::Unreachable(reason) => {
-                eprintln!(
-                    "{} {} — {}",
-                    "warning[unreachable-url]:".yellow(),
-                    outcome.url,
-                    reason
-                );
+                let msg = format!("unreachable-url: {} — {}", outcome.url, reason);
+                warnings.push(msg);
+                if human {
+                    eprintln!(
+                        "{} {} — {}",
+                        "warning[unreachable-url]:".yellow(),
+                        outcome.url,
+                        reason
+                    );
+                }
                 had_error = true;
             }
             UrlCheckResult::Rejected(reason) => {
-                eprintln!(
-                    "{} {} — {}",
-                    "warning[rejected-url]:".yellow(),
-                    outcome.url,
-                    reason
-                );
+                let msg = format!("rejected-url: {} — {}", outcome.url, reason);
+                warnings.push(msg);
+                if human {
+                    eprintln!(
+                        "{} {} — {}",
+                        "warning[rejected-url]:".yellow(),
+                        outcome.url,
+                        reason
+                    );
+                }
                 had_error = true;
             }
         }
@@ -166,7 +260,6 @@ fn verify_urls_from_lockfile(lockfile: &crate::lockfile::Lockfile, strict: bool)
 
     Ok(())
 }
-
 
 ///
 /// Returns the compiled content and the list of fragment names inlined.
@@ -193,7 +286,10 @@ pub fn compile_to_string(
 
     let (processed_body, fragments_used) = process_fragments(&body, fragments_dir)?;
     let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_src_dir)?;
-    Ok((format!("---\n{}\n---\n{}", frontmatter, compiled_body), fragments_used))
+    Ok((
+        format!("---\n{}\n---\n{}", frontmatter, compiled_body),
+        fragments_used,
+    ))
 }
 
 fn compile_skill(
@@ -203,22 +299,57 @@ fn compile_skill(
     skills_src_dir: &Path,
     lockfile: &mut Lockfile,
 ) -> Result<()> {
-    let (output, fragments_used) = compile_to_string(source, config, fragments_dir, skills_src_dir)?;
-    std::fs::create_dir_all(&source.skill_out_dir)
-        .with_context(|| format!("failed to create output directory {}", source.skill_out_dir.display()))?;
+    let (output, fragments_used) =
+        compile_to_string(source, config, fragments_dir, skills_src_dir)?;
+    std::fs::create_dir_all(&source.skill_out_dir).with_context(|| {
+        format!(
+            "failed to create output directory {}",
+            source.skill_out_dir.display()
+        )
+    })?;
     let output_path = source.skill_out_dir.join("SKILL.md");
     std::fs::write(&output_path, &output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
 
     let source_hash = workspace::hash_file(&source.source_path)?;
     let compiled_hash = hash_bytes(output.as_bytes());
-    let refs = collect_refs(&output);
+    let refs = collect_structured_refs(&output);
+
+    // Token counts
+    let tokenizer = &config.build.tokenizer;
+    let discovery_text = {
+        use crate::parse::parse_frontmatter;
+        match parse_frontmatter(&output) {
+            Ok(Some(fm)) => format!(
+                "{} {}",
+                fm.name.unwrap_or_default(),
+                fm.description.unwrap_or_default()
+            ),
+            _ => String::new(),
+        }
+    };
+    let discovery_tokens = crate::tokens::count_tokens(&discovery_text, tokenizer);
+    let activation_tokens = crate::tokens::count_tokens(&output, tokenizer);
+    let source_text = std::fs::read_to_string(&source.source_path)?;
+    let ref_tokens: u32 = crate::refs::extract_path_refs(&source_text)
+        .into_iter()
+        .filter_map(|rel| {
+            let path = source.skill_dir.join(&rel);
+            std::fs::read_to_string(&path)
+                .ok()
+                .map(|t| crate::tokens::count_tokens(&t, tokenizer))
+        })
+        .sum();
+    let transitive_tokens = activation_tokens + ref_tokens;
 
     lockfile.skills.insert(
         source.name.clone(),
         SkillEntry {
             source_hash,
             compiled_hash,
+            discovery_tokens,
+            activation_tokens,
+            transitive_tokens,
             fragments_used,
             refs,
         },
@@ -307,7 +438,9 @@ fn process_refs(
     let mut errors: Vec<String> = Vec::new();
 
     for caps in TYPED_REF_RE.captures_iter(body) {
-        let m = caps.get(0).expect("captures_iter always yields a full match");
+        let m = caps
+            .get(0)
+            .expect("captures_iter always yields a full match");
         result.push_str(&body[last_end..m.start()]);
         last_end = m.end();
 
@@ -349,8 +482,7 @@ fn process_refs(
             },
             "env" => match config.env.get(value) {
                 Some(e) => {
-                    let resolved =
-                        std::env::var(value).unwrap_or_else(|_| e.default.clone());
+                    let resolved = std::env::var(value).unwrap_or_else(|_| e.default.clone());
                     result.push_str(&resolved);
                 }
                 None => {
@@ -376,7 +508,11 @@ fn process_refs(
 /// Clears the existing entries, builds the `used_by` reverse-map from every
 /// skill's `fragments_used` list, then hashes each fragment file on disk.
 /// Sorting `used_by` alphabetically ensures deterministic lockfile output.
-fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Result<()> {
+fn rebuild_fragment_entries(
+    lockfile: &mut Lockfile,
+    fragments_dir: &Path,
+    tokenizer: &str,
+) -> Result<()> {
     lockfile.fragments.clear();
 
     // Reverse-map: fragment name → [skill names]
@@ -385,16 +521,19 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Re
             lockfile
                 .fragments
                 .entry(frag_name.clone())
-                .or_insert_with(FragmentLockEntry::default)
+                .or_default()
                 .used_by
                 .push(skill_name.clone());
         }
     }
 
-    // Hash each fragment file and sort used_by for deterministic output.
+    // Hash each fragment file, compute token count, and sort used_by.
     for (frag_name, frag_entry) in &mut lockfile.fragments {
         let path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        if let Ok(h) = workspace::hash_file(&path) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            frag_entry.hash = hash_bytes(text.as_bytes());
+            frag_entry.tokens = crate::tokens::count_tokens(&text, tokenizer);
+        } else if let Ok(h) = workspace::hash_file(&path) {
             frag_entry.hash = h;
         }
         frag_entry.used_by.sort();
@@ -403,31 +542,51 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, fragments_dir: &Path) -> Re
     Ok(())
 }
 
-/// Collects all detectable refs from compiled SKILL.md text.
+/// Collects all detectable refs from compiled SKILL.md text into a structured form.
 ///
-/// Gathers Layer 2 typed refs (`kind::value`) and Layer 1 markdown link targets
-/// (path links as `"path::value"`, URL links as `"url::value"`).  Duplicates
-/// are removed and the list is sorted for deterministic lockfile output.
-fn collect_refs(text: &str) -> Vec<String> {
-    let mut refs: Vec<String> = Vec::new();
+/// Gathers Layer 2 typed refs (`kind::value`) and Layer 1 markdown link targets.
+/// Duplicates are removed and lists are sorted for deterministic lockfile output.
+fn collect_structured_refs(text: &str) -> SkillRefs {
+    let mut paths: Vec<String> = Vec::new();
+    let mut commands: Vec<String> = Vec::new();
+    let mut skills: Vec<String> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
 
-    // Layer 2: typed ref directives
+    // Layer 2: typed ref directives in source (ref/cmd/skill)
     for caps in TYPED_REF_RE.captures_iter(text) {
-        refs.push(format!("{}::{}", &caps[1], caps[2].trim()));
+        let value = caps[2].trim().to_string();
+        match &caps[1] {
+            "ref" => paths.push(value),
+            "cmd" => commands.push(value),
+            "skill" => skills.push(value),
+            _ => {}
+        }
     }
 
     // Layer 1: markdown links
     for link in extract_markdown_links(text) {
         if link.is_url {
-            refs.push(format!("url::{}", link.target));
+            urls.push(link.target);
         } else {
-            refs.push(format!("path::{}", link.target));
+            paths.push(link.target);
         }
     }
 
-    refs.sort();
-    refs.dedup();
-    refs
+    paths.sort();
+    paths.dedup();
+    commands.sort();
+    commands.dedup();
+    skills.sort();
+    skills.dedup();
+    urls.sort();
+    urls.dedup();
+
+    SkillRefs {
+        paths,
+        commands,
+        skills,
+        urls,
+    }
 }
 
 /// Returns `"sha256:<hex>"` of `bytes` (in-memory hashing for compiled output).
@@ -563,8 +722,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act
-        let result =
-            process_refs("ci: `env::CI`", tmp.path(), &config, &skills_dir).unwrap();
+        let result = process_refs("ci: `env::CI`", tmp.path(), &config, &skills_dir).unwrap();
 
         // Assert — resolves to live env var or falls back to the configured default
         let expected = std::env::var("CI").unwrap_or_else(|_| "false".to_string());
@@ -579,8 +737,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act — "ls" is always on PATH in CI
-        let result =
-            process_refs("`cmd::ls -la`", tmp.path(), &config, &skills_dir).unwrap();
+        let result = process_refs("`cmd::ls -la`", tmp.path(), &config, &skills_dir).unwrap();
 
         // Assert
         assert_eq!(result, "`ls -la`");
@@ -759,19 +916,21 @@ mod tests {
         // Assert
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("nested"), "error should mention 'nested': {msg}");
-        assert!(msg.contains("outer"), "error should name the fragment: {msg}");
+        assert!(
+            msg.contains("nested"),
+            "error should mention 'nested': {msg}"
+        );
+        assert!(
+            msg.contains("outer"),
+            "error should name the fragment: {msg}"
+        );
     }
 
     #[test]
     fn process_fragments_allows_fragment_content_without_includes() {
         // Arrange — fragment has backticks but no include directives
         let tmp = TempDir::new().unwrap();
-        fs::write(
-            tmp.path().join("safe.fragment.pan"),
-            "use `cmd::ls`\n",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("safe.fragment.pan"), "use `cmd::ls`\n").unwrap();
         let body = "{{> safe }}\n";
 
         // Act
@@ -806,9 +965,15 @@ mod tests {
         let lf = crate::lockfile::read(tmp.path()).unwrap();
 
         // Assert
-        let frag = lf.fragments.get("note").expect("'note' fragment entry missing");
+        let frag = lf
+            .fragments
+            .get("note")
+            .expect("'note' fragment entry missing");
         assert!(!frag.hash.is_empty(), "fragment hash should be set");
-        assert!(frag.hash.starts_with("sha256:"), "hash should be sha256 prefixed");
+        assert!(
+            frag.hash.starts_with("sha256:"),
+            "hash should be sha256 prefixed"
+        );
         assert_eq!(frag.used_by, vec!["alpha"], "used_by should list 'alpha'");
     }
 
@@ -837,39 +1002,45 @@ mod tests {
         let lf = crate::lockfile::read(tmp.path()).unwrap();
 
         // Assert
-        let frag = lf.fragments.get("shared").expect("'shared' fragment entry missing");
+        let frag = lf
+            .fragments
+            .get("shared")
+            .expect("'shared' fragment entry missing");
         assert!(frag.used_by.contains(&"skill-a".to_string()));
         assert!(frag.used_by.contains(&"skill-b".to_string()));
     }
 
-    // ── collect_refs ─────────────────────────────────────────────────────────
+    // ── collect_structured_refs ──────────────────────────────────────────────
 
     #[test]
     fn collect_refs_includes_typed_ref_directive() {
         let text = "Use `cmd::git` for version control.";
-        let refs = collect_refs(text);
-        assert!(refs.contains(&"cmd::git".to_string()));
+        let refs = collect_structured_refs(text);
+        assert!(refs.commands.contains(&"git".to_string()));
     }
 
     #[test]
     fn collect_refs_includes_markdown_path_link() {
         let text = "See [guide](./docs/guide.md).";
-        let refs = collect_refs(text);
-        assert!(refs.contains(&"path::./docs/guide.md".to_string()));
+        let refs = collect_structured_refs(text);
+        assert!(refs.paths.contains(&"./docs/guide.md".to_string()));
     }
 
     #[test]
     fn collect_refs_includes_markdown_url_link() {
         let text = "Visit [site](https://example.com).";
-        let refs = collect_refs(text);
-        assert!(refs.contains(&"url::https://example.com".to_string()));
+        let refs = collect_structured_refs(text);
+        assert!(refs.urls.contains(&"https://example.com".to_string()));
     }
 
     #[test]
     fn collect_refs_deduplicates_entries() {
         let text = "`cmd::git` and `cmd::git`";
-        let refs = collect_refs(text);
-        assert_eq!(refs.iter().filter(|r| r.as_str() == "cmd::git").count(), 1);
+        let refs = collect_structured_refs(text);
+        assert_eq!(
+            refs.commands.iter().filter(|r| r.as_str() == "git").count(),
+            1
+        );
     }
 
     #[test]
@@ -895,9 +1066,9 @@ mod tests {
         // var:: expands inline (no longer in compiled output as a directive),
         // but the markdown URL link should be recorded.
         assert!(
-            entry.refs.iter().any(|r| r.starts_with("url::")),
-            "expected a url:: ref in lockfile, got: {:?}",
-            entry.refs
+            !entry.refs.urls.is_empty(),
+            "expected a url ref in lockfile, got: {:?}",
+            entry.refs.urls
         );
     }
 }

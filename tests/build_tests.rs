@@ -136,6 +136,32 @@ fn build_errors_on_nested_fragment_include() {
 }
 
 #[test]
+fn build_records_token_counts_in_lockfile() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Assert — lockfile should contain token fields
+    let lock = fs::read_to_string(tmp.path().join("skillet.lock")).unwrap();
+    assert!(
+        lock.contains("activation_tokens"),
+        "lockfile should contain activation_tokens"
+    );
+    assert!(
+        lock.contains("discovery_tokens"),
+        "lockfile should contain discovery_tokens"
+    );
+}
+#[test]
 fn build_records_fragment_hash_in_lockfile() {
     // Arrange
     let tmp = TempDir::new().unwrap();
@@ -160,7 +186,7 @@ fn build_records_fragment_hash_in_lockfile() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Assert — lockfile should contain a [fragments.note] section with a hash
+    // Assert — lockfile should contain a [fragments.note] section with a hash and tokens
     let lock = fs::read_to_string(tmp.path().join("skillet.lock")).unwrap();
     assert!(
         lock.contains("note"),
@@ -173,5 +199,9 @@ fn build_records_fragment_hash_in_lockfile() {
     assert!(
         lock.contains("my-skill"),
         "lockfile fragments section should list 'my-skill' in used_by"
+    );
+    assert!(
+        lock.contains("tokens"),
+        "lockfile fragment entry should contain a tokens field"
     );
 }

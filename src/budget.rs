@@ -36,6 +36,26 @@ pub struct BudgetRow {
     pub fragments: Vec<FragmentEntry>,
 }
 
+/// Workspace-level token totals.
+#[derive(Debug, Clone, Serialize)]
+pub struct BudgetTotals {
+    /// Sum of all discovery tokens.
+    pub discovery: u32,
+    /// Sum of all activation tokens.
+    pub activation: u32,
+    /// Sum of all transitive tokens.
+    pub transitive: u32,
+}
+
+/// Top-level budget report (used for JSON output).
+#[derive(Debug, Clone, Serialize)]
+pub struct BudgetReport {
+    /// Per-skill token rows.
+    pub skills: Vec<BudgetRow>,
+    /// Workspace-wide totals.
+    pub totals: BudgetTotals,
+}
+
 /// Output format for budget results.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OutputFormat {
@@ -77,7 +97,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, format: OutputFormat) -> 
 
     match format {
         OutputFormat::Human => print_human(&rows),
-        OutputFormat::Json => print_json(&rows)?,
+        OutputFormat::Json => print_json_report(&rows)?,
     }
 
     Ok(())
@@ -91,14 +111,50 @@ fn compute_row(
     lockfile: &lockfile::Lockfile,
     tokenizer: &str,
 ) -> Result<BudgetRow> {
+    // If the lockfile has pre-computed token data for this skill, use it
+    // directly so budget numbers stay consistent with skillet.lock.
+    if let Some(entry) = lockfile.skills.get(&source.name) {
+        if entry.activation_tokens > 0 {
+            // Build fragment list from lockfile fragment entries.
+            let mut fragments = Vec::with_capacity(entry.fragments_used.len());
+            for frag_name in &entry.fragments_used {
+                let tokens = lockfile
+                    .fragments
+                    .get(frag_name)
+                    .map(|f| f.tokens)
+                    .unwrap_or(0);
+                fragments.push(FragmentEntry {
+                    name: frag_name.clone(),
+                    tokens,
+                });
+            }
+            return Ok(BudgetRow {
+                skill: source.name.clone(),
+                discovery: entry.discovery_tokens,
+                activation: entry.activation_tokens,
+                transitive: entry.transitive_tokens,
+                fragments,
+            });
+        }
+    }
+
+    // Fallback: compute from disk (lockfile absent or skill not yet built).
+    compute_row_from_disk(source, fragments_dir, lockfile, tokenizer)
+}
+
+fn compute_row_from_disk(
+    source: &workspace::SkillSource,
+    fragments_dir: &Path,
+    lockfile: &lockfile::Lockfile,
+    tokenizer: &str,
+) -> Result<BudgetRow> {
     let skill_md_path = source.skill_out_dir.join("SKILL.md");
-    let compiled = std::fs::read_to_string(&skill_md_path)
-        .with_context(|| {
-            format!(
-                "SKILL.md not found for '{}' — run `skillet build` first",
-                source.name
-            )
-        })?;
+    let compiled = std::fs::read_to_string(&skill_md_path).with_context(|| {
+        format!(
+            "SKILL.md not found for '{}' — run `skillet build` first",
+            source.name
+        )
+    })?;
 
     // ── Discovery: name + description from frontmatter ────────────────────────
     let discovery_text = match parse_frontmatter(&compiled) {
@@ -116,14 +172,15 @@ fn compute_row(
 
     // ── Transitive: activation + linked ref files ─────────────────────────────
     // Scan the .skill source for `ref::path` so we see the unstripped typed refs.
-    let source_text = std::fs::read_to_string(&source.source_path).with_context(|| {
-        format!("failed to read source '{}'", source.source_path.display())
-    })?;
+    let source_text = std::fs::read_to_string(&source.source_path)
+        .with_context(|| format!("failed to read source '{}'", source.source_path.display()))?;
     let ref_tokens: u32 = crate::refs::extract_path_refs(&source_text)
         .into_iter()
         .filter_map(|rel| {
             let path = source.skill_dir.join(&rel);
-            std::fs::read_to_string(&path).ok().map(|t| count_tokens(&t, tokenizer))
+            std::fs::read_to_string(&path)
+                .ok()
+                .map(|t| count_tokens(&t, tokenizer))
         })
         .sum();
     let transitive = activation + ref_tokens;
@@ -168,7 +225,13 @@ fn print_human(rows: &[BudgetRow]) {
 
     // Determine column widths
     let w_skill = rows.iter().map(|r| r.skill.len()).max().unwrap_or(5).max(5);
-    let headers = ["Skill", "Discovery", "Activation", "Transitive", "Fragments"];
+    let headers = [
+        "Skill",
+        "Discovery",
+        "Activation",
+        "Transitive",
+        "Fragments",
+    ];
     let w_disc = "Discovery".len();
     let w_act = "Activation".len();
     let w_trans = "Transitive".len();
@@ -192,7 +255,11 @@ fn print_human(rows: &[BudgetRow]) {
     // Header
     println!(
         "{:<w_skill$}  {:>w_disc$}  {:>w_act$}  {:>w_trans$}  {:<w_frags$}",
-        headers[0], headers[1], headers[2], headers[3], headers[4],
+        headers[0],
+        headers[1],
+        headers[2],
+        headers[3],
+        headers[4],
         w_skill = w_skill,
         w_disc = w_disc,
         w_act = w_act,
@@ -246,8 +313,18 @@ fn print_human(rows: &[BudgetRow]) {
     );
 }
 
-fn print_json(rows: &[BudgetRow]) -> Result<()> {
-    let json = serde_json::to_string_pretty(rows).context("failed to serialise budget as JSON")?;
+fn print_json_report(rows: &[BudgetRow]) -> Result<()> {
+    let totals = BudgetTotals {
+        discovery: rows.iter().map(|r| r.discovery).sum(),
+        activation: rows.iter().map(|r| r.activation).sum(),
+        transitive: rows.iter().map(|r| r.transitive).sum(),
+    };
+    let report = BudgetReport {
+        skills: rows.to_vec(),
+        totals,
+    };
+    let json =
+        serde_json::to_string_pretty(&report).context("failed to serialise budget as JSON")?;
     println!("{}", json);
     Ok(())
 }
@@ -266,15 +343,13 @@ mod tests {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn init_workspace(dir: &std::path::Path) {
-        init::run(dir, false).expect("init failed");
+        init::run(dir, false, false).expect("init failed");
     }
 
     fn make_skill(dir: &std::path::Path, name: &str, description: &str, body: &str) {
         let skill_dir = dir.join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
-        let source = format!(
-            "---\nname: {name}\ndescription: \"{description}\"\n---\n\n{body}",
-        );
+        let source = format!("---\nname: {name}\ndescription: \"{description}\"\n---\n\n{body}",);
         fs::write(skill_dir.join(format!("{name}.pan")), source).unwrap();
     }
 
@@ -296,7 +371,12 @@ mod tests {
         // Arrange
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
-        make_skill(tmp.path(), "alpha", "does alpha things", "## Usage\nrun alpha\n");
+        make_skill(
+            tmp.path(),
+            "alpha",
+            "does alpha things",
+            "## Usage\nrun alpha\n",
+        );
         build::run(tmp.path(), Some("alpha"), &Default::default()).unwrap();
 
         // Act
@@ -422,6 +502,9 @@ mod tests {
         // Assert
         assert!(result.is_err(), "should error when SKILL.md is missing");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("skillet build"), "error should mention skillet build");
+        assert!(
+            msg.contains("skillet build"),
+            "error should mention skillet build"
+        );
     }
 }

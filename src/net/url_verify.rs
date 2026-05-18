@@ -76,8 +76,7 @@ pub fn verify_urls(urls: &[String]) -> Vec<UrlCheckOutcome> {
     }
 
     // Simple counting semaphore: limits concurrent threads.
-    let sem: Arc<(Mutex<usize>, Condvar)> =
-        Arc::new((Mutex::new(MAX_CONCURRENT), Condvar::new()));
+    let sem: Arc<(Mutex<usize>, Condvar)> = Arc::new((Mutex::new(MAX_CONCURRENT), Condvar::new()));
     let results: Arc<Mutex<Vec<UrlCheckOutcome>>> = Arc::new(Mutex::new(Vec::new()));
     let mut handles = Vec::with_capacity(unique.len());
 
@@ -260,7 +259,7 @@ fn is_blocked_v4(ip: Ipv4Addr) -> bool {
         || (o[0] == 172 && (o[1] & 0xF0) == 16)      // 172.16.0.0/12
         || (o[0] == 192 && o[1] == 168)               // 192.168.0.0/16
         || (o[0] == 169 && o[1] == 254)               // 169.254.0.0/16 link-local
-        || o[0] == 127                                // 127.0.0.0/8 loopback
+        || o[0] == 127 // 127.0.0.0/8 loopback
 }
 
 fn is_blocked_v6(ip: Ipv6Addr) -> bool {
@@ -320,9 +319,7 @@ fn check_url_inner(url: &str) -> Result<UrlCheckResult, String> {
     let tcp = addrs
         .iter()
         .find_map(|addr| TcpStream::connect_timeout(addr, TIMEOUT).ok())
-        .ok_or_else(|| {
-            format!("connection refused or timed out for '{}'", parsed.host)
-        })?;
+        .ok_or_else(|| format!("connection refused or timed out for '{}'", parsed.host))?;
 
     tcp.set_read_timeout(Some(TIMEOUT))
         .map_err(|e| format!("set_read_timeout: {e}"))?;
@@ -358,7 +355,7 @@ fn send_https_head(tcp: TcpStream, host: &str, request: &str) -> Result<String, 
         .map_err(|_| format!("invalid TLS server name: '{host}'"))?;
 
     let root_store = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect(),
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_store)

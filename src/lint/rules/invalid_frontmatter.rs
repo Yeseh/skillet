@@ -45,7 +45,12 @@ pub fn check(source: &SkillSource, raw: &str, _config: &SkilletConfig) -> Vec<Di
         _ => {}
     }
 
-    if fm.description.as_deref().map(|d| d.trim().is_empty()).unwrap_or(true) {
+    if fm
+        .description
+        .as_deref()
+        .map(|d| d.trim().is_empty())
+        .unwrap_or(true)
+    {
         diags.push(diag(
             Severity::Error,
             &source.name,
