@@ -13,11 +13,11 @@ Developing serious agent skills surfaces recurring pain points:
 
 ## Architecture
 
-Skillet uses a **preprocessor model**. Authors write `.skill` source files containing template directives. `skillet build` compiles these into spec-compliant `SKILL.md` files that any agent runtime can consume without knowing skillet exists.
+Skillet uses a **preprocessor model**. Authors write `.pan` source files containing template directives. `skillet build` compiles these into spec-compliant `SKILL.md` files that any agent runtime can consume without knowing skillet exists.
 
 ```
 ┌─────────────────┐       ┌──────────────┐       ┌────────────┐
-│  .skill source  │──────▶│ skillet build │──────▶│  SKILL.md  │
+│  .pan source    │──────▶│ skillet build │──────▶│  SKILL.md  │
 │  (with directives)      │              │       │  (plain md) │
 └─────────────────┘       └──────────────┘       └────────────┘
                                 │
@@ -37,14 +37,14 @@ project/
 ├── skillet.lock              # Committed lockfile (hashes, tokens, refs)
 └── skills/
     ├── _fragments/
-    │   ├── check-adrs.fragment.skill
-    │   └── common-tools.fragment.skill
+    │   ├── check-adrs.fragment.pan
+    │   └── common-tools.fragment.pan
     ├── diagnose/
-    │   ├── diagnose.skill    # Source (authored)
+    │   ├── diagnose.pan      # Source (authored)
     │   ├── SKILL.md          # Compiled output (committed)
     │   └── scripts/
     ├── caveman/
-    │   ├── caveman.skill
+    │   ├── caveman.pan
     │   └── SKILL.md
     └── ...
 ```
@@ -88,7 +88,7 @@ CI status: `env::CI`.
 
 Fragments are reusable blocks of skill instructions for eliminating cross-skill duplication.
 
-- File naming: `{name}.fragment.skill`
+- File naming: `{name}.fragment.pan`
 - Location: workspace-global `_fragments/` directory only
 - Include syntax: `{{> name }}` (block-level only, must be on its own line)
 - No parameters (v1)
@@ -241,10 +241,10 @@ used_by = ["diagnose", "grill-with-docs"]
 
 ```
 skillet init              # Scaffold workspace (skillet.toml, skills/, _fragments/)
-skillet init --adopt      # Adopt existing SKILL.md files into .skill sources
+skillet init --adopt      # Adopt existing SKILL.md files into .pan sources
 skillet new <name>        # Scaffold a new skill (minimal: frontmatter + heading)
 
-skillet build             # Compile all .skill sources → SKILL.md + update lockfile
+skillet build             # Compile all .pan sources → SKILL.md + update lockfile
 skillet build <name>      # Compile a single skill
 
 skillet lint              # Run all lint rules across workspace
@@ -298,13 +298,13 @@ src/
 ├── main.rs              # CLI entry (clap)
 ├── config.rs            # skillet.toml parsing
 ├── workspace.rs         # Skill discovery, workspace resolution
-├── parse.rs             # .skill source parsing (frontmatter + markdown + refs)
+├── parse.rs             # .pan source parsing (frontmatter + markdown + refs)
 ├── refs/
 │   ├── mod.rs           # Ref types, classification
 │   ├── heuristic.rs     # Layer 3 inference
 │   └── annotated.rs     # Layer 2 explicit ref:: parsing
 ├── fragments.rs         # Fragment resolution, inclusion
-├── build.rs             # Compilation pipeline (.skill → SKILL.md)
+├── build.rs             # Compilation pipeline (.pan → SKILL.md)
 ├── lint/
 │   ├── mod.rs           # Lint engine, rule registry
 │   ├── rules/           # One file per rule
@@ -360,4 +360,4 @@ No async runtime. Blocking I/O is sufficient for a dev tool with bounded concurr
 - **Conflict detection** — identify skills that contradict each other
 - **Semantic duplication** — embedding-based similarity detection
 - **Fragment parameters** — `{{> name key="value" }}` for parameterized reuse
-- **IDE integration** — LSP for `.skill` files (diagnostics, completion, go-to-fragment)
+- **IDE integration** — LSP for `.pan` files (diagnostics, completion, go-to-fragment)
