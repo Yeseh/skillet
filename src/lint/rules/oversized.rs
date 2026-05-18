@@ -2,7 +2,7 @@
 
 use crate::config::SkilletConfig;
 use crate::parse::parse_frontmatter;
-use crate::tokens::approx_tokens;
+use crate::tokens::count_tokens;
 use crate::workspace::SkillSource;
 use std::path::Path;
 
@@ -13,7 +13,7 @@ pub fn check_skill(source: &SkillSource, config: &SkilletConfig) -> Vec<Diagnost
     let Ok(content) = std::fs::read_to_string(&output_path) else {
         return vec![];
     };
-    let tokens = approx_tokens(&content);
+    let tokens = count_tokens(&content, &config.build.tokenizer);
     if tokens > config.lint.max_activation_tokens {
         vec![diag(
             Severity::Warning,
@@ -42,7 +42,7 @@ pub fn check_description(
         fm.name.as_deref().unwrap_or(""),
         fm.description.as_deref().unwrap_or("")
     );
-    let tokens = approx_tokens(&text);
+    let tokens = count_tokens(&text, &config.build.tokenizer);
     if tokens > config.lint.max_discovery_tokens {
         vec![diag(
             Severity::Warning,
@@ -73,7 +73,7 @@ pub fn check_fragments(config: &SkilletConfig, fragments_dir: &Path) -> Vec<Diag
             let fname = path.file_name()?.to_string_lossy().into_owned();
             let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
             let content = std::fs::read_to_string(&path).ok()?;
-            let tokens = approx_tokens(&content);
+            let tokens = count_tokens(&content, &config.build.tokenizer);
             if tokens > config.lint.max_fragment_tokens {
                 Some(diag(
                     Severity::Warning,

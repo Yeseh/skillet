@@ -3,7 +3,7 @@
 use crate::config;
 use crate::lockfile;
 use crate::parse::parse_frontmatter;
-use crate::tokens::approx_tokens;
+use crate::tokens::count_tokens;
 use crate::workspace;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -71,7 +71,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, format: OutputFormat) -> 
 
     let mut rows: Vec<BudgetRow> = Vec::with_capacity(targets.len());
     for source in &targets {
-        let row = compute_row(source, &fragments_dir, &lockfile)?;
+        let row = compute_row(source, &fragments_dir, &lockfile, &config.build.tokenizer)?;
         rows.push(row);
     }
 
@@ -89,6 +89,7 @@ fn compute_row(
     source: &workspace::SkillSource,
     fragments_dir: &Path,
     lockfile: &lockfile::Lockfile,
+    tokenizer: &str,
 ) -> Result<BudgetRow> {
     let skill_md_path = source.skill_out_dir.join("SKILL.md");
     let compiled = std::fs::read_to_string(&skill_md_path)
@@ -108,10 +109,10 @@ fn compute_row(
         ),
         _ => String::new(),
     };
-    let discovery = approx_tokens(&discovery_text);
+    let discovery = count_tokens(&discovery_text, tokenizer);
 
     // ── Activation: full compiled SKILL.md ────────────────────────────────────
-    let activation = approx_tokens(&compiled);
+    let activation = count_tokens(&compiled, tokenizer);
 
     // ── Transitive: activation + linked ref files ─────────────────────────────
     // Scan the .skill source for `ref::path` so we see the unstripped typed refs.
@@ -122,7 +123,7 @@ fn compute_row(
         .into_iter()
         .filter_map(|rel| {
             let path = source.skill_dir.join(&rel);
-            std::fs::read_to_string(&path).ok().map(|t| approx_tokens(&t))
+            std::fs::read_to_string(&path).ok().map(|t| count_tokens(&t, tokenizer))
         })
         .sum();
     let transitive = activation + ref_tokens;
@@ -138,7 +139,7 @@ fn compute_row(
     for frag_name in frag_names {
         let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
         let tokens = if let Ok(text) = std::fs::read_to_string(&frag_path) {
-            approx_tokens(&text)
+            count_tokens(&text, tokenizer)
         } else {
             0
         };
@@ -296,7 +297,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
         make_skill(tmp.path(), "alpha", "does alpha things", "## Usage\nrun alpha\n");
-        build::run(tmp.path(), Some("alpha")).unwrap();
+        build::run(tmp.path(), Some("alpha"), &Default::default()).unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
@@ -305,6 +306,7 @@ mod tests {
             &source,
             &tmp.path().join("src/skills/_fragments"),
             &lockfile,
+            "cl100k_base",
         )
         .unwrap();
 
@@ -325,7 +327,7 @@ mod tests {
             "short desc",
             "## Long body\n".repeat(20).as_str(),
         );
-        build::run(tmp.path(), Some("beta")).unwrap();
+        build::run(tmp.path(), Some("beta"), &Default::default()).unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
@@ -334,6 +336,7 @@ mod tests {
             &source,
             &tmp.path().join("src/skills/_fragments"),
             &lockfile,
+            "cl100k_base",
         )
         .unwrap();
 
@@ -359,12 +362,12 @@ mod tests {
         )
         .unwrap();
         make_skill(tmp.path(), "gamma", "uses a fragment", "{{> note }}\n");
-        build::run(tmp.path(), Some("gamma")).unwrap();
+        build::run(tmp.path(), Some("gamma"), &Default::default()).unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
         let source = built_source(tmp.path(), "gamma");
-        let row = compute_row(&source, &frags_dir, &lockfile).unwrap();
+        let row = compute_row(&source, &frags_dir, &lockfile, "cl100k_base").unwrap();
 
         // Assert
         assert_eq!(row.fragments.len(), 1);
@@ -378,7 +381,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
         make_skill(tmp.path(), "delta", "no refs here", "## Body\ncontent\n");
-        build::run(tmp.path(), Some("delta")).unwrap();
+        build::run(tmp.path(), Some("delta"), &Default::default()).unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
@@ -387,6 +390,7 @@ mod tests {
             &source,
             &tmp.path().join("src/skills/_fragments"),
             &lockfile,
+            "cl100k_base",
         )
         .unwrap();
 
@@ -412,6 +416,7 @@ mod tests {
             &source,
             &tmp.path().join("src/skills/_fragments"),
             &lockfile,
+            "cl100k_base",
         );
 
         // Assert
