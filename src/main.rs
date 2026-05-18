@@ -1,8 +1,7 @@
+#![allow(missing_docs)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-
-mod config;
-mod init;
 
 #[derive(Parser)]
 #[command(name = "skillet", about = "Skill management CLI")]
@@ -26,7 +25,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Init { adopt } => {
             let cwd = std::env::current_dir()?;
-            init::run(&cwd, adopt)?;
+            skillet::init::run(&cwd, adopt)?;
         }
     }
     Ok(())

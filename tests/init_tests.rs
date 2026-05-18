@@ -1,14 +1,14 @@
+#![allow(missing_docs)]
+
 use std::fs;
 use tempfile::TempDir;
 
 fn skillet_bin() -> std::path::PathBuf {
-    // Use cargo to get the binary
     let mut path = std::env::current_exe()
         .unwrap()
         .parent()
         .unwrap()
         .to_path_buf();
-    // When running tests, the exe is in deps/, go up one
     if path.ends_with("deps") {
         path = path.parent().unwrap().to_path_buf();
     }
@@ -24,19 +24,26 @@ fn run_skillet(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn test_init_happy_path() {
+fn init_creates_skills_dir_fragments_dir_and_config() {
+    // Arrange
     let tmp = TempDir::new().unwrap();
+
+    // Act
     let out = run_skillet(tmp.path(), &["init"]);
+
+    // Assert — exit code
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // Assert — filesystem layout
     assert!(tmp.path().join("skills").is_dir());
     assert!(tmp.path().join("skills/_fragments").is_dir());
     assert!(tmp.path().join("skillet.toml").is_file());
 
+    // Assert — config values
     let content = fs::read_to_string(tmp.path().join("skillet.toml")).unwrap();
     let parsed: toml::Value = toml::from_str(&content).unwrap();
 
@@ -79,7 +86,8 @@ fn test_init_happy_path() {
 }
 
 #[test]
-fn test_init_no_overwrite() {
+fn init_refuses_to_overwrite_existing_skillet_toml() {
+    // Arrange
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("skillet.toml"),
@@ -87,13 +95,16 @@ fn test_init_no_overwrite() {
     )
     .unwrap();
 
+    // Act
     let out = run_skillet(tmp.path(), &["init"]);
+
+    // Assert — command fails
     assert!(
         !out.status.success(),
         "expected failure when skillet.toml exists"
     );
 
-    // Original content preserved
+    // Assert — original content is preserved
     let content = fs::read_to_string(tmp.path().join("skillet.toml")).unwrap();
     assert!(
         content.contains("custom-skills"),
@@ -102,7 +113,8 @@ fn test_init_no_overwrite() {
 }
 
 #[test]
-fn test_init_adopt() {
+fn init_adopt_copies_skill_md_as_dot_skill_files() {
+    // Arrange
     let tmp = TempDir::new().unwrap();
     let diagnose_dir = tmp.path().join("skills/diagnose");
     let caveman_dir = tmp.path().join("skills/caveman");
@@ -114,31 +126,34 @@ fn test_init_adopt() {
     fs::write(diagnose_dir.join("SKILL.md"), diagnose_content).unwrap();
     fs::write(caveman_dir.join("SKILL.md"), caveman_content).unwrap();
 
+    // Act
     let out = run_skillet(tmp.path(), &["init", "--adopt"]);
+
+    // Assert — command succeeds
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Originals preserved
+    // Assert — originals preserved
     assert!(diagnose_dir.join("SKILL.md").exists());
     assert!(caveman_dir.join("SKILL.md").exists());
 
-    // .skill files created
+    // Assert — .skill files created with matching content
     assert!(diagnose_dir.join("diagnose.skill").exists());
     assert!(caveman_dir.join("caveman.skill").exists());
 
-    // Content matches byte-for-byte
-    let d_orig = fs::read(diagnose_dir.join("SKILL.md")).unwrap();
-    let d_copy = fs::read(diagnose_dir.join("diagnose.skill")).unwrap();
-    assert_eq!(d_orig, d_copy);
+    assert_eq!(
+        fs::read(diagnose_dir.join("SKILL.md")).unwrap(),
+        fs::read(diagnose_dir.join("diagnose.skill")).unwrap()
+    );
+    assert_eq!(
+        fs::read(caveman_dir.join("SKILL.md")).unwrap(),
+        fs::read(caveman_dir.join("caveman.skill")).unwrap()
+    );
 
-    let c_orig = fs::read(caveman_dir.join("SKILL.md")).unwrap();
-    let c_copy = fs::read(caveman_dir.join("caveman.skill")).unwrap();
-    assert_eq!(c_orig, c_copy);
-
-    // Workspace scaffolded
+    // Assert — workspace scaffolded
     assert!(tmp.path().join("skillet.toml").is_file());
     assert!(tmp.path().join("skills/_fragments").is_dir());
 }
