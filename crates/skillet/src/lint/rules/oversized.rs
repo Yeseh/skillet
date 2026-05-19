@@ -13,7 +13,11 @@ use super::{diag, Diagnostic, Severity};
 /// Uses cached `activation_tokens` from the lockfile when available — no
 /// re-tokenization.  Falls back to reading `SKILL.md` directly when there is
 /// no lockfile entry (e.g. a stale-build scenario where the rule still runs).
-pub fn check_skill(source: &SourceFile, config: &SkilletConfig, lockfile: &Lockfile) -> Vec<Diagnostic> {
+pub fn check_skill(
+    source: &SourceFile,
+    config: &SkilletConfig,
+    lockfile: &Lockfile,
+) -> Vec<Diagnostic> {
     let tokens = if let Some(entry) = lockfile.skills.get(&source.name) {
         if entry.activation_tokens > 0 {
             entry.activation_tokens

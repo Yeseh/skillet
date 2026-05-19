@@ -155,7 +155,10 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
     // ── Phase 1: Parallel source scan ────────────────────────────────────────
     let p1_start = std::time::Instant::now();
     let source_files = pipeline::scan_sources(
-        &scan_targets.iter().map(|s| (*s).clone()).collect::<Vec<_>>(),
+        &scan_targets
+            .iter()
+            .map(|s| (*s).clone())
+            .collect::<Vec<_>>(),
         &config.build.tokenizer,
     );
     let p1_elapsed = p1_start.elapsed();
@@ -177,12 +180,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
         || -> Vec<Diagnostic> {
             source_files
                 .par_iter()
-                .filter(|sf| {
-                    matches!(
-                        sf.file_type,
-                        pipeline::SourceFileType::Skill
-                    )
-                })
+                .filter(|sf| matches!(sf.file_type, pipeline::SourceFileType::Skill))
                 .flat_map(|sf| {
                     lint_skill(
                         sf,
@@ -197,7 +195,13 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
         },
         || -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
             if run_workspace_rules {
-                lint_workspace(&config, &all_sources, &source_files, &fragments_dir, &lockfile)
+                lint_workspace(
+                    &config,
+                    &all_sources,
+                    &source_files,
+                    &fragments_dir,
+                    &lockfile,
+                )
             } else {
                 (vec![], vec![])
             }
@@ -301,7 +305,11 @@ fn lint_workspace(
     lockfile: &crate::lockfile::Lockfile,
 ) -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
     let mut diags = Vec::new();
-    diags.extend(rules::unused_fragment::check(source_files, fragments_dir, config));
+    diags.extend(rules::unused_fragment::check(
+        source_files,
+        fragments_dir,
+        config,
+    ));
     diags.extend(rules::oversized::check_fragments(config, fragments_dir));
     let (dup_diags, updated_sigs) = rules::duplication::check(all_sources, lockfile);
     diags.extend(dup_diags);
@@ -373,7 +381,10 @@ fn print_text(
                 (Some(p), None, _) => format!(" {}", p),
                 _ => String::new(),
             };
-            println!("[{tag}] {} ({}){}: {}", d.skill, d.rule, location, d.message);
+            println!(
+                "[{tag}] {} ({}){}: {}",
+                d.skill, d.rule, location, d.message
+            );
         }
         let errors = diagnostics
             .iter()
@@ -388,7 +399,10 @@ fn print_text(
             .filter(|d| d.severity == Severity::Info)
             .count();
         if infos > 0 {
-            println!("\n{} error(s), {} warning(s), {} info(s)", errors, warnings, infos);
+            println!(
+                "\n{} error(s), {} warning(s), {} info(s)",
+                errors, warnings, infos
+            );
         } else {
             println!("\n{} error(s), {} warning(s)", errors, warnings);
         }
@@ -431,11 +445,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn make_source_file(
-        dir: &Path,
-        name: &str,
-        content: &str,
-    ) -> pipeline::SourceFile {
+    fn make_source_file(dir: &Path, name: &str, content: &str) -> pipeline::SourceFile {
         let skill_dir = dir.join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
         let source_path = skill_dir.join(format!("{name}.pan"));
@@ -638,8 +648,7 @@ mod tests {
             "diagnose",
             "---\nname: diagnose\ndescription: x\n---\n\n{{> note }}\n",
         );
-        let diags =
-            rules::unused_fragment::check(&[sf], tmp.path(), &SkilletConfig::default());
+        let diags = rules::unused_fragment::check(&[sf], tmp.path(), &SkilletConfig::default());
         assert!(diags.is_empty());
     }
 

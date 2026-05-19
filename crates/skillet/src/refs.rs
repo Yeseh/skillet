@@ -167,8 +167,7 @@ impl ParsedRefs {
 
         // Byte ranges occupied by typed refs — used to skip them in the
         // untyped backtick scan so we don't double-report.
-        let typed_spans: Vec<(usize, usize)> =
-            typed.iter().map(|r| (r.start, r.end)).collect();
+        let typed_spans: Vec<(usize, usize)> = typed.iter().map(|r| (r.start, r.end)).collect();
 
         let links = extract_markdown_links(raw);
 
@@ -176,7 +175,10 @@ impl ParsedRefs {
             .captures_iter(raw)
             .filter_map(|caps| {
                 let m = caps.get(0).unwrap();
-                if typed_spans.iter().any(|&(s, e)| m.start() >= s && m.end() <= e) {
+                if typed_spans
+                    .iter()
+                    .any(|&(s, e)| m.start() >= s && m.end() <= e)
+                {
                     return None;
                 }
                 let content = caps[1].trim();
@@ -191,7 +193,11 @@ impl ParsedRefs {
             })
             .collect();
 
-        Self { typed, links, untyped }
+        Self {
+            typed,
+            links,
+            untyped,
+        }
     }
 }
 

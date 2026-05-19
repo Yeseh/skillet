@@ -806,7 +806,10 @@ mod tests {
         // Assert
         let skill_md = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
         assert!(skill_md.starts_with("---\n"));
-        assert!(skill_md.contains("---\n\n"), "blank line must follow closing ---");
+        assert!(
+            skill_md.contains("---\n\n"),
+            "blank line must follow closing ---"
+        );
         assert!(skill_md.contains("# My Skill"));
     }
 

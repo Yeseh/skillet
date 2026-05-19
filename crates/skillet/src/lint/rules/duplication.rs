@@ -120,7 +120,11 @@ pub fn check(
         for wa in wins_a {
             for wb in wins_b {
                 if overlap_ratio(wa, wb) > OVERLAP_THRESHOLD {
-                    let passage = if wa.len() >= wb.len() { wa.clone() } else { wb.clone() };
+                    let passage = if wa.len() >= wb.len() {
+                        wa.clone()
+                    } else {
+                        wb.clone()
+                    };
                     raw_matches.push((passage, name_a, name_b));
                 }
             }

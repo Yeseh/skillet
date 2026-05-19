@@ -128,23 +128,25 @@ fn scan_skill_files(src: &SkillSource, tokenizer: &str) -> Vec<SourceFile> {
     let mut files = Vec::new();
 
     // Primary .pan source file.
-    files.push(match read_and_scan(src, &src.source_path, SourceFileType::Skill, tokenizer) {
-        Ok(sf) => sf,
-        Err(e) => SourceFile {
-            id: 0,
-            file_type: SourceFileType::Skill,
-            name: src.name.clone(),
-            source_path: src.source_path.clone(),
-            skill_dir: src.skill_dir.clone(),
-            skill_out_dir: src.skill_out_dir.clone(),
-            raw: String::new(),
-            source_hash: String::new(),
-            token_count: 0,
-            frontmatter: None,
-            parse_errors: vec![format!("cannot read source: {e}")],
-            parsed_refs: ParsedRefs::default(),
+    files.push(
+        match read_and_scan(src, &src.source_path, SourceFileType::Skill, tokenizer) {
+            Ok(sf) => sf,
+            Err(e) => SourceFile {
+                id: 0,
+                file_type: SourceFileType::Skill,
+                name: src.name.clone(),
+                source_path: src.source_path.clone(),
+                skill_dir: src.skill_dir.clone(),
+                skill_out_dir: src.skill_out_dir.clone(),
+                raw: String::new(),
+                source_hash: String::new(),
+                token_count: 0,
+                frontmatter: None,
+                parse_errors: vec![format!("cannot read source: {e}")],
+                parsed_refs: ParsedRefs::default(),
+            },
         },
-    });
+    );
 
     // Reference documents under `{skill_dir}/reference/`.
     let ref_dir = src.skill_dir.join("reference");
@@ -358,7 +360,9 @@ mod tests {
 
         let files = scan_sources(&[src], "cl100k_base");
         assert_eq!(files.len(), 2);
-        let ref_file = files.iter().find(|f| f.file_type == SourceFileType::ReferenceDocument);
+        let ref_file = files
+            .iter()
+            .find(|f| f.file_type == SourceFileType::ReferenceDocument);
         assert!(ref_file.is_some());
     }
 

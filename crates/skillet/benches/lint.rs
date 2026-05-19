@@ -73,8 +73,7 @@ fn bench_lint_scaling(c: &mut Criterion) {
     group.sample_size(20);
 
     // mean_ns[i] accumulates per-sample nanos for SIZES[i]
-    let mut mean_ns: Vec<(usize, Vec<f64>)> =
-        SIZES.iter().map(|&n| (n, Vec::new())).collect();
+    let mut mean_ns: Vec<(usize, Vec<f64>)> = SIZES.iter().map(|&n| (n, Vec::new())).collect();
 
     for ((n, tmp), (_, samples)) in workspaces.iter().zip(mean_ns.iter_mut()) {
         let opts = LintOptions::new(false, false, OutputFormat::Silent);

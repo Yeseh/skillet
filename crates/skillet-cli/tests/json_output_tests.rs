@@ -1,4 +1,3 @@
-
 mod common;
 
 use tempfile::TempDir;
