@@ -381,10 +381,7 @@ fn print_text(
                 (Some(p), None, _) => format!(" ({})", p),
                 _ => String::new(),
             };
-            println!(
-                "[{tag}] {} ({}) {}{}",
-                d.skill, d.rule, d.message, location
-            );
+            println!("[{tag}] {} ({}) {}{}", d.skill, d.rule, d.message, location);
         }
         let errors = diagnostics
             .iter()
