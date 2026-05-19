@@ -65,6 +65,11 @@ enum Commands {
         #[arg(long, default_value = "human")]
         format: FormatArg,
     },
+    /// Print a bundled skill's content to stdout
+    Skill {
+        /// Name of the bundled skill to print
+        name: String,
+    },
     /// Check skills for quality issues
     Lint {
         /// Name of a single skill to lint (lints all if omitted)
@@ -126,6 +131,9 @@ fn main() -> Result<()> {
                 FormatArg::Human => skillet::budget::OutputFormat::Human,
             };
             skillet::budget::run(&cwd, name.as_deref(), fmt)?;
+        }
+        Commands::Skill { name } => {
+            skillet::skill::run(&name)?;
         }
         Commands::Lint {
             name,

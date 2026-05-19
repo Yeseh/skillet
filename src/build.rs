@@ -287,7 +287,7 @@ pub fn compile_to_string(
     let (processed_body, fragments_used) = process_fragments(&body, fragments_dir)?;
     let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_src_dir)?;
     Ok((
-        format!("---\n{}\n---\n{}", frontmatter, compiled_body),
+        format!("---\n{}\n---\n\n{}", frontmatter, compiled_body),
         fragments_used,
     ))
 }
@@ -809,6 +809,7 @@ mod tests {
         // Assert
         let skill_md = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
         assert!(skill_md.starts_with("---\n"));
+        assert!(skill_md.contains("---\n\n"), "blank line must follow closing ---");
         assert!(skill_md.contains("# My Skill"));
     }
 
