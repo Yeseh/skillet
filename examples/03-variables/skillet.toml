@@ -1,0 +1,22 @@
+[workspace]
+skills_src_dir = "src/skills"
+skills_out_dir = "skills"
+fragments_dir = "src/skills/_fragments"
+
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens = 100
+max_fragment_tokens = 500
+allowed_commands = ["docker", "kubectl", "git"]
+disable = []
+
+[build]
+tokenizer = "cl100k_base"
+verify_urls = false
+
+[vars]
+project_name = "acme-app"
+
+[env]
+DEPLOY_ENV = { default = "staging" }
+CI = { default = "false" }
