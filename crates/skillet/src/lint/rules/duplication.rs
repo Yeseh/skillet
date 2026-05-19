@@ -120,6 +120,7 @@ pub fn check(all_sources: &[SkillSource]) -> Vec<Diagnostic> {
                 message: msg,
                 path: None,
                 line: None,
+                col: None,
                 duplicated_text: Some(c.passage),
                 affected_skills: Some(affected_skills),
             }

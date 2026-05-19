@@ -1,34 +1,29 @@
 //! Rule: `untyped-backtick` — nudges authors toward explicit ref annotations.
 
-use crate::config::SkilletConfig;
-use crate::refs::{classify_untyped, extract_body, TYPED_REF_RE, UNTYPED_BACKTICK_RE};
+use crate::refs::ParsedRefs;
 use crate::workspace::SkillSource;
 
-use super::{diag, Diagnostic, Severity};
+use super::{diag_located, Diagnostic, Severity};
 
-pub fn check(
-    source: &SkillSource,
-    raw: &str,
-    all_sources: &[SkillSource],
-    _config: &SkilletConfig,
-) -> Vec<Diagnostic> {
-    let body = extract_body(raw);
-    let stripped = TYPED_REF_RE.replace_all(&body, "");
+pub fn check(source: &SkillSource, parsed: &ParsedRefs) -> Vec<Diagnostic> {
+    let file_path = source.source_path.to_string_lossy().to_string();
 
-    let skill_names: Vec<&str> = all_sources.iter().map(|s| s.name.as_str()).collect();
-    let mut diags = Vec::new();
-
-    for caps in UNTYPED_BACKTICK_RE.captures_iter(&stripped) {
-        let content = caps[1].trim();
-        if let Some(kind) = classify_untyped(content, &skill_names) {
-            diags.push(diag(
+    parsed
+        .untyped
+        .iter()
+        .map(|u| {
+            diag_located(
                 Severity::Info,
                 &source.name,
                 "untyped-backtick",
-                format!("`{content}` looks like a {kind} — consider `{kind}::{content}`"),
-            ));
-        }
-    }
-
-    diags
+                format!(
+                    "`{}` looks like a {} — consider `{}::{}`",
+                    u.content, u.inferred_kind, u.inferred_kind, u.content
+                ),
+                Some(file_path.clone()),
+                Some(u.line),
+                Some(u.col),
+            )
+        })
+        .collect()
 }

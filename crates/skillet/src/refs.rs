@@ -12,6 +12,73 @@ use std::sync::LazyLock;
 pub(crate) static TYPED_REF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`(ref|cmd|skill|var|env)::([^`]+)`").unwrap());
 
+/// The kind of a typed ref directive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    /// `ref::` — file-path reference.
+    Ref,
+    /// `cmd::` — shell command reference.
+    Cmd,
+    /// `skill::` — cross-skill reference.
+    Skill,
+    /// `var::` — workspace variable reference.
+    Var,
+    /// `env::` — environment variable reference.
+    Env,
+}
+
+impl RefKind {
+    fn from_prefix(s: &str) -> Option<Self> {
+        match s {
+            "ref" => Some(Self::Ref),
+            "cmd" => Some(Self::Cmd),
+            "skill" => Some(Self::Skill),
+            "var" => Some(Self::Var),
+            "env" => Some(Self::Env),
+            _ => None,
+        }
+    }
+}
+
+/// A parsed typed ref directive with its position in the source text.
+#[derive(Debug, Clone)]
+pub struct TypedRef {
+    /// The kind of this ref.
+    pub kind: RefKind,
+    /// The value after the `::` separator (trimmed).
+    pub value: String,
+    /// Byte offset of the opening backtick in the source text.
+    pub start: usize,
+    /// Byte offset just past the closing backtick in the source text.
+    pub end: usize,
+    /// 1-based line number in the source text.
+    pub line: u32,
+    /// 1-based column number (character position) in the source text.
+    pub col: u32,
+}
+
+/// Returns all typed ref directives found in `text`, in source order.
+pub fn typed_refs(text: &str) -> Vec<TypedRef> {
+    TYPED_REF_RE
+        .captures_iter(text)
+        .filter_map(|caps| {
+            let m = caps.get(0)?;
+            let kind = RefKind::from_prefix(&caps[1])?;
+            let before = &text[..m.start()];
+            let line = (before.bytes().filter(|&b| b == b'\n').count() + 1) as u32;
+            let col = (before.rfind('\n').map_or(m.start(), |n| m.start() - n - 1) + 1) as u32;
+            Some(TypedRef {
+                kind,
+                value: caps[2].trim().to_string(),
+                start: m.start(),
+                end: m.end(),
+                line,
+                col,
+            })
+        })
+        .collect()
+}
+
 /// Matches `ref::` path directives only (used for transitive cost calculation).
 static PATH_REF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`ref::([^`]+)`").unwrap());
 
@@ -23,7 +90,7 @@ pub(crate) static UNTYPED_BACKTICK_RE: LazyLock<Regex> =
 pub(crate) static MARKDOWN_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
 
-/// A parsed markdown link target with classification.
+/// A parsed markdown link target with classification and source position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownLink {
     /// Display text of the link.
@@ -32,26 +99,108 @@ pub struct MarkdownLink {
     pub target: String,
     /// Whether the target looks like a URL.
     pub is_url: bool,
+    /// 1-based line number in the source text.
+    pub line: u32,
+    /// 1-based column number in the source text.
+    pub col: u32,
 }
 
 /// Extracts all markdown link targets from `text`.
 ///
-/// Each entry carries the display text, raw target, and a flag indicating
-/// whether the target is a URL (`http://` / `https://` prefix).  Image links
-/// (`![]()`) are included — the leading `!` is part of the display text.
+/// Each entry carries the display text, raw target, a URL flag, and the
+/// 1-based line/col of the opening `[` within `text`.  Image links (`![]()`)
+/// are included — the leading `!` is part of the display text.
 pub fn extract_markdown_links(text: &str) -> Vec<MarkdownLink> {
     MARKDOWN_LINK_RE
         .captures_iter(text)
         .map(|caps| {
+            let m = caps.get(0).unwrap();
+            let (line, col) = line_col(text, m.start());
             let target = caps[2].trim().to_string();
             let is_url = target.starts_with("http://") || target.starts_with("https://");
             MarkdownLink {
                 text: caps[1].to_string(),
                 target,
                 is_url,
+                line,
+                col,
             }
         })
         .collect()
+}
+
+/// An untyped backtick whose content has been classified by the Layer 3 heuristic.
+#[derive(Debug, Clone)]
+pub struct UntypedRef {
+    /// Raw content between the backticks (trimmed).
+    pub content: String,
+    /// Heuristic classification (`"path"`, `"url"`, `"skill"`, `"command"`).
+    pub inferred_kind: &'static str,
+    /// 1-based line number in the source text.
+    pub line: u32,
+    /// 1-based column number in the source text.
+    pub col: u32,
+}
+
+/// All refs collected from a single source file in one pass.
+///
+/// Build this with [`ParsedRefs::extract`] and pass it to lint rules so that
+/// each rule reads pre-collected, pre-positioned data rather than re-scanning
+/// the raw text.
+#[derive(Debug, Default)]
+pub struct ParsedRefs {
+    /// Typed ref directives (`ref::`, `cmd::`, `skill::`, `var::`, `env::`).
+    pub typed: Vec<TypedRef>,
+    /// Markdown links (`[text](target)`).
+    pub links: Vec<MarkdownLink>,
+    /// Untyped backticks that the Layer 3 heuristic could classify.
+    pub untyped: Vec<UntypedRef>,
+}
+
+impl ParsedRefs {
+    /// Scans `raw` once and populates all three ref collections.
+    ///
+    /// `skill_names` is used by the untyped-backtick classifier to recognise
+    /// cross-skill references.
+    pub fn extract(raw: &str, skill_names: &[&str]) -> Self {
+        let typed = typed_refs(raw);
+
+        // Byte ranges occupied by typed refs — used to skip them in the
+        // untyped backtick scan so we don't double-report.
+        let typed_spans: Vec<(usize, usize)> =
+            typed.iter().map(|r| (r.start, r.end)).collect();
+
+        let links = extract_markdown_links(raw);
+
+        let untyped = UNTYPED_BACKTICK_RE
+            .captures_iter(raw)
+            .filter_map(|caps| {
+                let m = caps.get(0).unwrap();
+                if typed_spans.iter().any(|&(s, e)| m.start() >= s && m.end() <= e) {
+                    return None;
+                }
+                let content = caps[1].trim();
+                let inferred_kind = classify_untyped(content, skill_names)?;
+                let (line, col) = line_col(raw, m.start());
+                Some(UntypedRef {
+                    content: content.to_string(),
+                    inferred_kind,
+                    line,
+                    col,
+                })
+            })
+            .collect();
+
+        Self { typed, links, untyped }
+    }
+}
+
+/// Returns the 1-based (line, col) for `offset` bytes into `text`.
+fn line_col(text: &str, offset: usize) -> (u32, u32) {
+    let before = &text[..offset];
+    let line = (before.bytes().filter(|&b| b == b'\n').count() + 1) as u32;
+    let col = (before.rfind('\n').map_or(offset, |n| offset - n - 1) + 1) as u32;
+    (line, col)
 }
 
 /// Extracts the `ref::` path values from `text`.

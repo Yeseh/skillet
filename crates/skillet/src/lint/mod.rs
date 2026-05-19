@@ -4,6 +4,7 @@
 //! the `rules` submodule — one file per rule (or closely-related rule group).
 
 use crate::config::SkilletConfig;
+use crate::refs::ParsedRefs;
 use crate::workspace::{self, SkillSource};
 use anyhow::Result;
 use owo_colors::OwoColorize;
@@ -44,6 +45,9 @@ pub struct Diagnostic {
     /// 1-based line number where the issue was found (when known).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    /// 1-based column number where the issue was found (when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
     /// The duplicated passage text (duplication rule only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duplicated_text: Option<String>,
@@ -60,6 +64,8 @@ pub enum OutputFormat {
     Text,
     /// Machine-parseable JSON array.
     Json,
+    /// Suppress all output (useful for benchmarks and programmatic use).
+    Silent,
 }
 
 /// Options controlling lint behaviour.
@@ -103,6 +109,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
+    let lockfile = crate::lockfile::read(workspace)?;
 
     let all_sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
     let targets: Vec<&SkillSource> = match skill_name {
@@ -118,9 +125,9 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
             source,
             &config,
             &all_sources,
-            workspace,
             &fragments_dir,
             &skills_src_dir,
+            &lockfile,
         ));
     }
 
@@ -152,6 +159,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
     match opts.format {
         OutputFormat::Text => print_text(&diagnostics, files_scanned, elapsed_ms),
         OutputFormat::Json => print_json(&diagnostics)?,
+        OutputFormat::Silent => {}
     }
 
     Ok(!has_errors)
@@ -163,9 +171,9 @@ fn lint_skill(
     source: &SkillSource,
     config: &SkilletConfig,
     all_sources: &[SkillSource],
-    _workspace: &Path,
     fragments_dir: &Path,
     skills_src_dir: &Path,
+    lockfile: &crate::lockfile::Lockfile,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
 
@@ -182,27 +190,20 @@ fn lint_skill(
         }
     };
 
+    let skill_names: Vec<&str> = all_sources.iter().map(|s| s.name.as_str()).collect();
+    let parsed = ParsedRefs::extract(&raw, &skill_names);
+
     diags.extend(rules::invalid_frontmatter::check(source, &raw, config));
     diags.extend(rules::stale_refs::check(
         source,
-        &raw,
+        &parsed,
         config,
         all_sources,
         skills_src_dir,
     ));
-    diags.extend(rules::markdown_links::check(source, &raw, config));
-    diags.extend(rules::untyped_backtick::check(
-        source,
-        &raw,
-        all_sources,
-        config,
-    ));
-    diags.extend(rules::stale_build::check(
-        source,
-        config,
-        fragments_dir,
-        skills_src_dir,
-    ));
+    diags.extend(rules::markdown_links::check(source, &parsed, config));
+    diags.extend(rules::untyped_backtick::check(source, &parsed));
+    diags.extend(rules::stale_build::check(source, fragments_dir, lockfile));
     diags.extend(rules::oversized::check_skill(source, config));
     diags.extend(rules::oversized::check_description(source, &raw, config));
 
@@ -237,6 +238,7 @@ pub(crate) fn diag(severity: Severity, skill: &str, rule: &str, message: String)
         message,
         path: None,
         line: None,
+        col: None,
         duplicated_text: None,
         affected_skills: None,
     }
@@ -249,6 +251,7 @@ pub(crate) fn diag_located(
     message: String,
     path: Option<String>,
     line: Option<u32>,
+    col: Option<u32>,
 ) -> Diagnostic {
     Diagnostic {
         rule: rule.to_string(),
@@ -257,6 +260,7 @@ pub(crate) fn diag_located(
         message,
         path,
         line,
+        col,
         duplicated_text: None,
         affected_skills: None,
     }
@@ -274,7 +278,13 @@ fn print_text(diagnostics: &[Diagnostic], files_scanned: usize, elapsed_ms: u128
                 Severity::Warning => "warning".yellow().bold().to_string(),
                 Severity::Info => "info".cyan().bold().to_string(),
             };
-            println!("[{tag}] {} ({}): {}", d.skill, d.rule, d.message);
+            let location = match (&d.path, d.line, d.col) {
+                (Some(p), Some(l), Some(c)) => format!(" {}:{}:{}", p, l, c),
+                (Some(p), Some(l), None) => format!(" {}:{}", p, l),
+                (Some(p), None, _) => format!(" {}", p),
+                _ => String::new(),
+            };
+            println!("[{tag}] {} ({}){}: {}", d.skill, d.rule, location, d.message);
         }
         let errors = diagnostics
             .iter()
@@ -317,6 +327,7 @@ fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::SkilletConfig;
+    use crate::refs::ParsedRefs;
     use std::fs;
     use tempfile::TempDir;
 
@@ -418,10 +429,13 @@ mod tests {
         );
         let config = SkilletConfig::default();
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),
@@ -443,10 +457,13 @@ mod tests {
         fs::write(src.skill_dir.join("helper.sh"), "").unwrap();
         let config = SkilletConfig::default();
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),
@@ -467,10 +484,13 @@ mod tests {
         );
         let config = SkilletConfig::default();
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),
@@ -491,10 +511,13 @@ mod tests {
         );
         let config = SkilletConfig::default();
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),
@@ -515,10 +538,13 @@ mod tests {
         );
         let config = SkilletConfig::default(); // has project_name in vars
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),
@@ -539,10 +565,13 @@ mod tests {
         );
         let config = SkilletConfig::default();
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),
@@ -563,10 +592,13 @@ mod tests {
         );
         let config = SkilletConfig::default(); // has CI in env
 
+        let raw = fs::read_to_string(&src.source_path).unwrap();
+        let parsed = ParsedRefs::extract(&raw, &[]);
+
         // Act
         let diags = rules::stale_refs::check(
             &src,
-            &fs::read_to_string(&src.source_path).unwrap(),
+            &parsed,
             &config,
             &[],
             &tmp.path().join("src/skills"),

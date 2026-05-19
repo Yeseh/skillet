@@ -175,16 +175,80 @@ During build:
 
 `skillet.toml` controls workspace paths, lint thresholds, tokenizer settings, and declared vars/env values.
 
-The default workspace section looks like this:
+### `[workspace]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `skills_src_dir` | string | `"src/skills"` | Directory where skill source `.pan` files are stored, relative to the project root. |
+| `skills_out_dir` | string | `"skills"` | Directory where compiled `SKILL.md` outputs are written, relative to the project root. |
+| `fragments_dir` | string | `"src/skills/_fragments"` | Directory where fragment `.fragment.pan` files are stored. |
+
+### `[lint]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_activation_tokens` | integer | `4000` | Maximum token budget for a skill's activation section. Exceeding this triggers an oversized warning. |
+| `max_discovery_tokens` | integer | `100` | Maximum token budget for a skill's discovery section (name + description). |
+| `max_fragment_tokens` | integer | `500` | Maximum token budget for a single fragment file. |
+| `allowed_commands` | list of strings | `["playwright", "docker", "kubectl"]` | Shell commands that skills are permitted to reference with `cmd::`. Commands not in this list are flagged. |
+| `disable` | list of strings | `[]` | Rule IDs to silence (e.g. `"lint-missing-docs"`). |
+
+### `[build]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `tokenizer` | string | `"cl100k_base"` | Tokenizer model used for token counting. |
+| `verify_urls` | boolean | `false` | When `true`, build verifies that URLs referenced in skills are reachable. Equivalent to passing `--strict` but persisted in config. |
+
+### `[vars]`
+
+A freeform key/value map of template variables available inside skill templates via `var::`. Values are plain strings substituted inline at build time.
+
+```toml
+[vars]
+project_name = "my-project"
+```
+
+### `[env]`
+
+Declares environment variables with fallback defaults. Each entry is a table with a `default` key. At build time, skillet reads the real environment variable; if it is unset, the `default` is used instead.
+
+```toml
+[env.CI]
+default = "false"
+
+[env.TEAM_NAME]
+default = "engineering"
+```
+
+### Full example
 
 ```toml
 [workspace]
 skills_src_dir = "src/skills"
 skills_out_dir = "skills"
 fragments_dir = "src/skills/_fragments"
-```
 
-The generated config also includes default lint thresholds, tokenizer settings, a sample `project_name` var, and declared environment defaults like `CI` and `TEAM_NAME`.
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens = 100
+max_fragment_tokens = 500
+allowed_commands = ["playwright", "docker", "kubectl"]
+disable = []
+
+[build]
+tokenizer = "cl100k_base"
+verify_urls = false
+
+[vars]
+project_name = "my-project"
+
+[env.CI]
+default = "false"
+
+[env.TEAM_NAME]
+default = "engineering"
+```
 
 ## Lockfile
 

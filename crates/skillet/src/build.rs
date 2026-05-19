@@ -2,7 +2,7 @@
 
 use crate::config::{self, SkilletConfig};
 use crate::lockfile::{LockMeta, Lockfile, SkillEntry, SkillRefs};
-use crate::refs::{extract_markdown_links, TYPED_REF_RE};
+use crate::refs::{extract_markdown_links, typed_refs, RefKind};
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -437,60 +437,51 @@ fn process_refs(
     let mut last_end = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    for caps in TYPED_REF_RE.captures_iter(body) {
-        let m = caps
-            .get(0)
-            .expect("captures_iter always yields a full match");
-        result.push_str(&body[last_end..m.start()]);
-        last_end = m.end();
+    for tr in typed_refs(body) {
+        result.push_str(&body[last_end..tr.start]);
+        last_end = tr.end;
 
-        let prefix = &caps[1];
-        let value = caps[2].trim();
-
-        match prefix {
-            "ref" => {
-                if !skill_dir.join(value).exists() {
-                    errors.push(format!("ref path not found: '{}'", value));
+        match tr.kind {
+            RefKind::Ref => {
+                if !skill_dir.join(&tr.value).exists() {
+                    errors.push(format!("ref path not found: '{}'", tr.value));
                 }
                 result.push('`');
-                result.push_str(value);
+                result.push_str(&tr.value);
                 result.push('`');
             }
-            "cmd" => {
-                let cmd = value.split_whitespace().next().unwrap_or(value);
+            RefKind::Cmd => {
+                let cmd = tr.value.split_whitespace().next().unwrap_or(&tr.value);
                 if !workspace::is_on_path(cmd) {
                     eprintln!("warning: command '{}' not found on PATH", cmd);
                 }
                 result.push('`');
-                result.push_str(value);
+                result.push_str(&tr.value);
                 result.push('`');
             }
-            "skill" => {
-                if !skills_dir.join(value).is_dir() {
-                    errors.push(format!("skill '{}' not found in workspace", value));
+            RefKind::Skill => {
+                if !skills_dir.join(&tr.value).is_dir() {
+                    errors.push(format!("skill '{}' not found in workspace", tr.value));
                 }
                 result.push('`');
-                result.push_str(value);
+                result.push_str(&tr.value);
                 result.push('`');
             }
-            "var" => match config.vars.get(value) {
+            RefKind::Var => match config.vars.get(&tr.value) {
                 Some(v) => result.push_str(v),
                 None => {
-                    errors.push(format!("var '{}' not declared in [vars]", value));
-                    result.push_str(&caps[0]);
+                    errors.push(format!("var '{}' not declared in [vars]", tr.value));
                 }
             },
-            "env" => match config.env.get(value) {
+            RefKind::Env => match config.env.get(&tr.value) {
                 Some(e) => {
-                    let resolved = std::env::var(value).unwrap_or_else(|_| e.default.clone());
+                    let resolved = std::env::var(&tr.value).unwrap_or_else(|_| e.default.clone());
                     result.push_str(&resolved);
                 }
                 None => {
-                    errors.push(format!("env '{}' not declared in [env]", value));
-                    result.push_str(&caps[0]);
+                    errors.push(format!("env '{}' not declared in [env]", tr.value));
                 }
             },
-            _ => unreachable!("TYPED_REF_RE only matches ref|cmd|skill|var|env"),
         }
     }
 
@@ -552,18 +543,15 @@ fn collect_structured_refs(text: &str) -> SkillRefs {
     let mut skills: Vec<String> = Vec::new();
     let mut urls: Vec<String> = Vec::new();
 
-    // Layer 2: typed ref directives in source (ref/cmd/skill)
-    for caps in TYPED_REF_RE.captures_iter(text) {
-        let value = caps[2].trim().to_string();
-        match &caps[1] {
-            "ref" => paths.push(value),
-            "cmd" => commands.push(value),
-            "skill" => skills.push(value),
-            _ => {}
+    for tr in typed_refs(text) {
+        match tr.kind {
+            RefKind::Ref => paths.push(tr.value),
+            RefKind::Cmd => commands.push(tr.value),
+            RefKind::Skill => skills.push(tr.value),
+            RefKind::Var | RefKind::Env => {}
         }
     }
 
-    // Layer 1: markdown links
     for link in extract_markdown_links(text) {
         if link.is_url {
             urls.push(link.target);

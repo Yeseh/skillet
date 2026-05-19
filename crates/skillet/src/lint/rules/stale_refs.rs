@@ -1,7 +1,7 @@
 //! Rules: `stale-path-ref`, `stale-command-ref`, `stale-skill-ref`.
 
 use crate::config::SkilletConfig;
-use crate::refs::TYPED_REF_RE;
+use crate::refs::{ParsedRefs, RefKind};
 use crate::workspace::{self, SkillSource};
 use std::path::Path;
 
@@ -9,7 +9,7 @@ use super::{diag_located, Diagnostic, Severity};
 
 pub fn check(
     source: &SkillSource,
-    raw: &str,
+    parsed: &ParsedRefs,
     config: &SkilletConfig,
     all_sources: &[SkillSource],
     skills_src_dir: &Path,
@@ -17,26 +17,22 @@ pub fn check(
     let mut diags = Vec::new();
     let file_path = source.source_path.to_string_lossy().to_string();
 
-    for caps in TYPED_REF_RE.captures_iter(raw) {
-        let m = caps.get(0).expect("full match");
-        let line_no = (raw[..m.start()].bytes().filter(|&b| b == b'\n').count() + 1) as u32;
-        let prefix = &caps[1];
-        let value = caps[2].trim();
-
-        match prefix {
-            "ref" if !source.skill_dir.join(value).exists() => {
+    for tr in &parsed.typed {
+        match tr.kind {
+            RefKind::Ref if !source.skill_dir.join(&tr.value).exists() => {
                 diags.push(diag_located(
                     Severity::Error,
                     &source.name,
                     "stale-path-ref",
-                    format!("ref path not found: '{value}'"),
+                    format!("ref path not found: '{}'", tr.value),
                     Some(file_path.clone()),
-                    Some(line_no),
+                    Some(tr.line),
+                    Some(tr.col),
                 ));
             }
-            "ref" => {}
-            "cmd" => {
-                let cmd = value.split_whitespace().next().unwrap_or(value);
+            RefKind::Ref => {}
+            RefKind::Cmd => {
+                let cmd = tr.value.split_whitespace().next().unwrap_or(&tr.value);
                 let allowed = config.lint.allowed_commands.iter().any(|c| c == cmd);
                 if !allowed && !workspace::is_on_path(cmd) {
                     diags.push(diag_located(
@@ -45,47 +41,50 @@ pub fn check(
                         "stale-command-ref",
                         format!("command '{cmd}' not found on PATH"),
                         Some(file_path.clone()),
-                        Some(line_no),
+                        Some(tr.line),
+                        Some(tr.col),
                     ));
                 }
             }
-            "skill"
-                if !all_sources.iter().any(|s| s.name == value)
-                    && !skills_src_dir.join(value).is_dir() =>
+            RefKind::Skill
+                if !all_sources.iter().any(|s| s.name == tr.value)
+                    && !skills_src_dir.join(&tr.value).is_dir() =>
             {
                 diags.push(diag_located(
                     Severity::Error,
                     &source.name,
                     "stale-skill-ref",
-                    format!("skill '{value}' not found in workspace"),
+                    format!("skill '{}' not found in workspace", tr.value),
                     Some(file_path.clone()),
-                    Some(line_no),
+                    Some(tr.line),
+                    Some(tr.col),
                 ));
             }
-            "skill" => {}
-            "var" if !config.vars.contains_key(value) => {
+            RefKind::Skill => {}
+            RefKind::Var if !config.vars.contains_key(&tr.value) => {
                 diags.push(diag_located(
                     Severity::Error,
                     &source.name,
                     "stale-var-ref",
-                    format!("var '{value}' not declared in [vars]"),
+                    format!("var '{}' not declared in [vars]", tr.value),
                     Some(file_path.clone()),
-                    Some(line_no),
+                    Some(tr.line),
+                    Some(tr.col),
                 ));
             }
-            "var" => {}
-            "env" if !config.env.contains_key(value) => {
+            RefKind::Var => {}
+            RefKind::Env if !config.env.contains_key(&tr.value) => {
                 diags.push(diag_located(
                     Severity::Error,
                     &source.name,
                     "stale-env-ref",
-                    format!("env '{value}' not declared in [env]"),
+                    format!("env '{}' not declared in [env]", tr.value),
                     Some(file_path.clone()),
-                    Some(line_no),
+                    Some(tr.line),
+                    Some(tr.col),
                 ));
             }
-            "env" => {}
-            _ => {}
+            RefKind::Env => {}
         }
     }
 
