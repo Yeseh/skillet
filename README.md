@@ -42,7 +42,7 @@ That gives you a workspace, scaffolds a skill, compiles it to `skills/<name>/SKI
 - **Catch problems early.** Validate typed refs, detect stale output, lint skills, and optionally verify URLs.
 - **Track context cost.** Record discovery, activation, and transitive token counts in `skillet.lock` and inspect them with `skillet budget`.
 - **Reduce repetition.** Detect duplicated passages across skills so shared guidance can move into fragments.
-- **Integrate cleanly.** Every command supports human and JSON output.
+- **Integrate cleanly.** Commands that support formatting can emit JSON for tooling.
 
 ## Core commands
 
@@ -55,7 +55,8 @@ That gives you a workspace, scaffolds a skill, compiles it to `skills/<name>/SKI
 | `skillet lint [name]` | Run lint rules, including duplication checks |
 | `skillet budget [name]` | Show token budget information |
 
-All commands support `--format human` and `--format json`.
+Commands that support formatting accept `--format json`.
+By default, output is plain text.
 
 ## Learn more
 

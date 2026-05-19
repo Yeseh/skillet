@@ -376,14 +376,14 @@ fn print_text(
                 Severity::Info => "info".cyan().bold().to_string(),
             };
             let location = match (&d.path, d.line, d.col) {
-                (Some(p), Some(l), Some(c)) => format!(" {}:{}:{}", p, l, c),
-                (Some(p), Some(l), None) => format!(" {}:{}", p, l),
-                (Some(p), None, _) => format!(" {}", p),
+                (Some(p), Some(l), Some(c)) => format!(" ({}:{}:{})", p, l, c),
+                (Some(p), Some(l), None) => format!(" ({}:{})", p, l),
+                (Some(p), None, _) => format!(" ({})", p),
                 _ => String::new(),
             };
             println!(
-                "[{tag}] {} ({}){}: {}",
-                d.skill, d.rule, location, d.message
+                "[{tag}] {} ({}) {}{}",
+                d.skill, d.rule, d.message, location
             );
         }
         let errors = diagnostics

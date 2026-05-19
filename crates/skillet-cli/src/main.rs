@@ -112,8 +112,17 @@ fn main() -> Result<()> {
                 Some(FormatArg::Json) => skillet::build::OutputFormat::Json,
                 None => skillet::build::OutputFormat::Text,
             };
-            let opts = skillet::build::BuildOptions::new_with_format(offline, strict, fmt);
-            skillet::build::run(&cwd, name.as_deref(), &opts)?;
+            let opts = skillet::build::BuildOptions::new_with_format(offline, strict, fmt.clone());
+            if let Err(err) = skillet::build::run(&cwd, name.as_deref(), &opts) {
+                if fmt == skillet::build::OutputFormat::Text {
+                    if let Some(build_failure) = err.downcast_ref::<skillet::build::BuildFailure>()
+                    {
+                        eprintln!("{}", build_failure.render_text());
+                        std::process::exit(1);
+                    }
+                }
+                return Err(err);
+            }
         }
         Commands::Check { format } => {
             let cwd = std::env::current_dir()?;

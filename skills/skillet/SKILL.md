@@ -31,7 +31,8 @@ A workspace contains:
 | `skillet budget [name]` | Show token cost information |
 | `skillet skill <name>` | Print a bundled skill to stdout |
 
-All commands support `--format human` (default) and `--format json`.
+Commands that support formatting accept `--format json`.
+By default, output is plain text.
 
 ## Skill source format
 

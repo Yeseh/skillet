@@ -134,6 +134,88 @@ fn build_errors_on_nested_fragment_include() {
 }
 
 #[test]
+fn build_reports_ref_errors_with_source_location() {
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
+    fs::write(
+        &source_path,
+        "---\nname: my-skill\ndescription: \"test\"\n---\n\nUse `ref::missing.txt` here.\n",
+    )
+    .unwrap();
+
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    assert!(
+        !out.status.success(),
+        "build should fail on missing ref path"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("my-skill "),
+        "stderr should include the skill name in the formatted diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("{}:6:5", source_path.display())),
+        "stderr should include the source path with line and column: {stderr}"
+    );
+    assert!(
+        stderr.contains("ref path not found: 'missing.txt'"),
+        "stderr should include the ref validation message: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "ref path not found: 'missing.txt' ({}:6:5)",
+            source_path.display()
+        )),
+        "stderr should place the source path after the error message: {stderr}"
+    );
+}
+
+#[test]
+fn build_reports_command_warnings_with_formatted_tag() {
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
+    fs::write(
+        &source_path,
+        "---\nname: my-skill\ndescription: \"test\"\n---\n\nRun `cmd::definitely-not-a-real-command --flag`.\n",
+    )
+    .unwrap();
+
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    assert!(
+        out.status.success(),
+        "build should succeed on PATH warnings"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("my-skill "),
+        "stderr should include the skill name in the warning: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("{}:6:5", source_path.display())),
+        "stderr should include the warning source path with line and column: {stderr}"
+    );
+    assert!(
+        stderr.contains("command 'definitely-not-a-real-command' not found on PATH"),
+        "stderr should include the warning message: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "command 'definitely-not-a-real-command' not found on PATH ({}:6:5)",
+            source_path.display()
+        )),
+        "stderr should place the source path after the warning message: {stderr}"
+    );
+}
+
+#[test]
 fn build_records_token_counts_in_lockfile() {
     // Arrange
     let tmp = TempDir::new().unwrap();

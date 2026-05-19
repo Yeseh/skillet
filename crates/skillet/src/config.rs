@@ -95,11 +95,7 @@ impl Default for SkilletConfig {
                 max_activation_tokens: 4000,
                 max_discovery_tokens: 100,
                 max_fragment_tokens: 500,
-                allowed_commands: vec![
-                    "playwright".to_string(),
-                    "docker".to_string(),
-                    "kubectl".to_string(),
-                ],
+                allowed_commands: vec![],
                 disable: vec![],
             },
             build: BuildConfig {

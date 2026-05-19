@@ -7,9 +7,11 @@ use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use gray_matter::{engine::YAML, Matter};
+use owo_colors::OwoColorize;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use std::fmt;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -69,6 +71,92 @@ pub struct BuildReport {
     /// Path to the written `skillet.lock` file.
     pub lockfile_path: String,
 }
+
+/// A single build-time diagnostic.
+#[derive(Debug, Clone)]
+pub struct BuildDiagnostic {
+    /// Severity of the diagnostic.
+    pub severity: BuildSeverity,
+    /// Skill name this applies to.
+    pub skill: String,
+    /// Description of the problem.
+    pub message: String,
+    /// File path where the issue was found.
+    pub path: String,
+    /// 1-based line number where the issue was found.
+    pub line: u32,
+    /// 1-based column number where the issue was found.
+    pub col: u32,
+}
+
+/// Build diagnostic severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildSeverity {
+    /// Non-fatal warning.
+    Warning,
+    /// Fatal validation error.
+    Error,
+}
+
+impl BuildDiagnostic {
+    fn new(
+        severity: BuildSeverity,
+        skill: &str,
+        message: String,
+        path: &Path,
+        line: u32,
+        col: u32,
+    ) -> Self {
+        Self {
+            severity,
+            skill: skill.to_string(),
+            message,
+            path: path.display().to_string(),
+            line,
+            col,
+        }
+    }
+
+    fn render_text(&self) -> String {
+        let tag = match self.severity {
+            BuildSeverity::Warning => "warning".yellow().bold().to_string(),
+            BuildSeverity::Error => "error".red().bold().to_string(),
+        };
+        format!(
+            "[{tag}] {} {} ({}:{}:{})",
+            self.skill, self.message, self.path, self.line, self.col
+        )
+    }
+}
+
+/// Build failure containing one or more diagnostics.
+#[derive(Debug)]
+pub struct BuildFailure {
+    diagnostics: Vec<BuildDiagnostic>,
+}
+
+impl BuildFailure {
+    fn new(diagnostics: Vec<BuildDiagnostic>) -> Self {
+        Self { diagnostics }
+    }
+
+    /// Renders the failure in the same text shape used by lint diagnostics.
+    pub fn render_text(&self) -> String {
+        self.diagnostics
+            .iter()
+            .map(BuildDiagnostic::render_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+impl fmt::Display for BuildFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render_text())
+    }
+}
+
+impl std::error::Error for BuildFailure {}
 
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 ///
@@ -273,7 +361,7 @@ pub fn compile_to_string(
     let raw = std::fs::read_to_string(&source.source_path)
         .with_context(|| format!("failed to read {}", source.source_path.display()))?;
 
-    let (frontmatter, name, body) = parse_source(&raw)
+    let (frontmatter, name, body, body_start_line) = parse_source(&raw)
         .with_context(|| format!("failed to parse {}", source.source_path.display()))?;
 
     if name != source.name {
@@ -285,7 +373,15 @@ pub fn compile_to_string(
     }
 
     let (processed_body, fragments_used) = process_fragments(&body, fragments_dir)?;
-    let compiled_body = process_refs(&processed_body, &source.skill_dir, config, skills_src_dir)?;
+    let compiled_body = process_refs(
+        &processed_body,
+        &source.name,
+        &source.source_path,
+        body_start_line,
+        &source.skill_dir,
+        config,
+        skills_src_dir,
+    )?;
     Ok((
         format!("---\n{}\n---\n\n{}", frontmatter, compiled_body),
         fragments_used,
@@ -379,17 +475,53 @@ struct SkillFrontmatter {
 ///
 /// `frontmatter_str` is the raw YAML text between the `---` delimiters,
 /// preserved verbatim for pass-through into `SKILL.md`.
-fn parse_source(source: &str) -> Result<(String, String, String)> {
+fn parse_source(source: &str) -> Result<(String, String, String, u32)> {
     let matter = Matter::<YAML>::new();
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let parsed = matter
-        .parse::<SkillFrontmatter>(source.strip_prefix('\u{feff}').unwrap_or(source))
+        .parse::<SkillFrontmatter>(source)
         .context("failed to parse skill source")?;
 
     let fm = parsed
         .data
         .ok_or_else(|| anyhow::anyhow!("source has no YAML frontmatter"))?;
 
-    Ok((parsed.matter, fm.name, parsed.content))
+    let body_start_line = find_body_start_line(source, &parsed.content);
+
+    Ok((parsed.matter, fm.name, parsed.content, body_start_line))
+}
+
+fn find_body_start_line(source: &str, body: &str) -> u32 {
+    let body_offset = find_body_offset(source);
+    let content_offset = if body.is_empty() {
+        body_offset
+    } else {
+        source[body_offset..]
+            .find(body)
+            .map(|offset| body_offset + offset)
+            .unwrap_or(body_offset)
+    };
+
+    (source[..content_offset]
+        .bytes()
+        .filter(|&byte| byte == b'\n')
+        .count()
+        + 1) as u32
+}
+
+fn find_body_offset(source: &str) -> usize {
+    let mut offset = 0;
+    let mut line_no = 0;
+
+    for line in source.split_inclusive('\n') {
+        line_no += 1;
+        offset += line.len();
+        if line_no > 1 && line.trim_end_matches(['\r', '\n']) == "---" {
+            return offset;
+        }
+    }
+
+    0
 }
 
 /// Expands `{{> fragment-name }}` include directives in `body`.
@@ -438,13 +570,16 @@ fn process_fragments(body: &str, fragments_dir: &Path) -> Result<(String, Vec<St
 /// and execution continues.
 fn process_refs(
     body: &str,
+    skill_name: &str,
+    source_path: &Path,
+    body_start_line: u32,
     skill_dir: &Path,
     config: &SkilletConfig,
     skills_dir: &Path,
 ) -> Result<String> {
     let mut result = String::with_capacity(body.len());
     let mut last_end = 0;
-    let mut errors: Vec<String> = Vec::new();
+    let mut errors: Vec<BuildDiagnostic> = Vec::new();
 
     for tr in typed_refs(body) {
         result.push_str(&body[last_end..tr.start]);
@@ -453,7 +588,14 @@ fn process_refs(
         match tr.kind {
             RefKind::Ref => {
                 if !skill_dir.join(&tr.value).exists() {
-                    errors.push(format!("ref path not found: '{}'", tr.value));
+                    errors.push(BuildDiagnostic::new(
+                        BuildSeverity::Error,
+                        skill_name,
+                        format!("ref path not found: '{}'", tr.value),
+                        source_path,
+                        body_start_line + tr.line - 1,
+                        tr.col,
+                    ));
                 }
                 result.push('`');
                 result.push_str(&tr.value);
@@ -462,7 +604,18 @@ fn process_refs(
             RefKind::Cmd => {
                 let cmd = tr.value.split_whitespace().next().unwrap_or(&tr.value);
                 if !workspace::is_on_path(cmd) {
-                    eprintln!("warning: command '{}' not found on PATH", cmd);
+                    eprintln!(
+                        "{}",
+                        BuildDiagnostic::new(
+                            BuildSeverity::Warning,
+                            skill_name,
+                            format!("command '{}' not found on PATH", cmd),
+                            source_path,
+                            body_start_line + tr.line - 1,
+                            tr.col,
+                        )
+                        .render_text()
+                    );
                 }
                 result.push('`');
                 result.push_str(&tr.value);
@@ -470,7 +623,14 @@ fn process_refs(
             }
             RefKind::Skill => {
                 if !skills_dir.join(&tr.value).is_dir() {
-                    errors.push(format!("skill '{}' not found in workspace", tr.value));
+                    errors.push(BuildDiagnostic::new(
+                        BuildSeverity::Error,
+                        skill_name,
+                        format!("skill '{}' not found in workspace", tr.value),
+                        source_path,
+                        body_start_line + tr.line - 1,
+                        tr.col,
+                    ));
                 }
                 result.push('`');
                 result.push_str(&tr.value);
@@ -479,7 +639,14 @@ fn process_refs(
             RefKind::Var => match config.vars.get(&tr.value) {
                 Some(v) => result.push_str(v),
                 None => {
-                    errors.push(format!("var '{}' not declared in [vars]", tr.value));
+                    errors.push(BuildDiagnostic::new(
+                        BuildSeverity::Error,
+                        skill_name,
+                        format!("var '{}' not declared in [vars]", tr.value),
+                        source_path,
+                        body_start_line + tr.line - 1,
+                        tr.col,
+                    ));
                 }
             },
             RefKind::Env => match config.env.get(&tr.value) {
@@ -488,7 +655,14 @@ fn process_refs(
                     result.push_str(&resolved);
                 }
                 None => {
-                    errors.push(format!("env '{}' not declared in [env]", tr.value));
+                    errors.push(BuildDiagnostic::new(
+                        BuildSeverity::Error,
+                        skill_name,
+                        format!("env '{}' not declared in [env]", tr.value),
+                        source_path,
+                        body_start_line + tr.line - 1,
+                        tr.col,
+                    ));
                 }
             },
         }
@@ -497,7 +671,7 @@ fn process_refs(
     result.push_str(&body[last_end..]);
 
     if !errors.is_empty() {
-        bail!("{}", errors.join("\n"));
+        return Err(BuildFailure::new(errors).into());
     }
 
     Ok(result)

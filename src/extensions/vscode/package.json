@@ -13,9 +13,6 @@
     "vscode": "^1.85.0"
   },
   "categories": ["Linters", "Programming Languages"],
-  "activationEvents": [
-    "onLanguage:pan"
-  ],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [
