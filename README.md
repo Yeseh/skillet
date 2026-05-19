@@ -1,22 +1,30 @@
 <div align="center">
-  <h1><code>Skillet</code></h1>
+    <p align="center">
+      <img src="assets/logo.png" alt="Skillet" width="200" />
+    </p>
 
-  <p>
+  <p align="center">
     <strong>
         Toolkit for developing AI agents, skills, and prompts with Markdown
     </strong>
   </p>
 </div>
 
-<p align="center">
-  <img src="assets/logo.png" alt="Skillet" width="200" />
-</p>
 
-# Skillet
+# Introduction 
 
 Skillet is a Rust CLI for authoring, compiling, linting, and budgeting AI agent skills.
 
 Authors write skill source files in a lightweight `.pan` format, then compile them into plain `SKILL.md` files that an agent runtime can consume directly.
+
+## Quick start
+
+To install directly from GitHub:
+
+```bash
+cargo install --git https://github.com/Yeseh/skillet.git
+skillet init
+```
 
 ## What Skillet does
 
@@ -54,32 +62,6 @@ Source files live under `src/skills/`.
 
 Compiled output is written to `skills/`.
 
-## Quick start
-
-If you just want to try the CLI from this repo:
-
-```bash
-cargo run -- init
-cargo run -- new my-skill
-cargo run -- build
-cargo run -- lint
-cargo run -- check
-cargo run -- budget
-```
-
-If you want an installed binary instead:
-
-```bash
-cargo install --path .
-skillet init
-```
-
-To install directly from GitHub without cloning:
-
-```bash
-cargo install --git https://github.com/Yeseh/skillet.git
-skillet init
-```
 
 ## Core workflow
 
