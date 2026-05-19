@@ -1,0 +1,68 @@
+{
+  "name": "skillet",
+  "displayName": "Skillet",
+  "description": "Syntax highlighting, linting, and ref decorations for .pan skill source files",
+  "version": "0.1.0",
+  "publisher": "skillet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skillet-works/skillet"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Linters", "Programming Languages"],
+  "activationEvents": [
+    "onLanguage:pan"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "pan",
+        "aliases": ["Pan", "pan"],
+        "extensions": [".pan"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pan",
+        "scopeName": "text.html.pan",
+        "path": "./syntaxes/pan.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.yaml": "yaml",
+          "meta.embedded.block.markdown": "markdown"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Skillet",
+      "properties": {
+        "skillet.executablePath": {
+          "type": "string",
+          "default": "skillet",
+          "description": "Path to the skillet executable. Defaults to 'skillet' (must be on $PATH). Relative paths are resolved against the workspace root."
+        },
+        "skillet.pedantic": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass --pedantic to skillet lint to show info-level diagnostics (e.g. untyped backticks)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  }
+}

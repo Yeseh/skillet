@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Pan",
+  "scopeName": "text.html.pan",
+  "fileTypes": ["pan"],
+  "patterns": [
+    { "include": "#frontmatter" },
+    { "include": "#block-include" },
+    { "include": "#typed-ref" },
+    { "include": "#markdown" }
+  ],
+  "repository": {
+    "frontmatter": {
+      "comment": "YAML frontmatter block at top of file",
+      "begin": "\\A---\\s*$",
+      "end": "^---\\s*$",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.frontmatter.begin.pan" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.frontmatter.end.pan" }
+      },
+      "contentName": "meta.embedded.block.yaml",
+      "patterns": [
+        { "include": "source.yaml" }
+      ]
+    },
+    "block-include": {
+      "comment": "Block include directive: {{> fragment-name }}",
+      "match": "(\\{\\{>)\\s*([a-zA-Z0-9_-]+)\\s*(\\}\\})",
+      "captures": {
+        "1": { "name": "punctuation.definition.include.begin.pan keyword.control.pan" },
+        "2": { "name": "entity.name.function.pan" },
+        "3": { "name": "punctuation.definition.include.end.pan keyword.control.pan" }
+      }
+    },
+    "typed-ref": {
+      "comment": "Typed ref in backticks: `ref::path`, `cmd::git`, `skill::name`, `var::x`, `env::VAR`",
+      "match": "(`)(ref|cmd|skill|var|env)(::)([^`]*?)(`)",
+      "captures": {
+        "1": { "name": "punctuation.definition.ref.begin.pan" },
+        "2": { "name": "support.type.ref-kind.pan" },
+        "3": { "name": "punctuation.separator.ref.pan" },
+        "4": { "name": "string.other.ref-target.pan" },
+        "5": { "name": "punctuation.definition.ref.end.pan" }
+      }
+    },
+    "markdown": {
+      "comment": "Remainder delegates to standard markdown grammar",
+      "include": "text.html.markdown"
+    }
+  }
+}
