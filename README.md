@@ -10,9 +10,11 @@
   </p>
 </div>
 
----
 
 # Introduction 
+
+> [!WARNING]
+> This project is experimental and subject to change.
 
 Skillet is a Rust CLI for authoring, compiling, linting, and budgeting AI agent skills.
 

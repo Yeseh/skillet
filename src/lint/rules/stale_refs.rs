@@ -24,18 +24,17 @@ pub fn check(
         let value = caps[2].trim();
 
         match prefix {
-            "ref" => {
-                if !source.skill_dir.join(value).exists() {
-                    diags.push(diag_located(
-                        Severity::Error,
-                        &source.name,
-                        "stale-path-ref",
-                        format!("ref path not found: '{value}'"),
-                        Some(file_path.clone()),
-                        Some(line_no),
-                    ));
-                }
+            "ref" if !source.skill_dir.join(value).exists() => {
+                diags.push(diag_located(
+                    Severity::Error,
+                    &source.name,
+                    "stale-path-ref",
+                    format!("ref path not found: '{value}'"),
+                    Some(file_path.clone()),
+                    Some(line_no),
+                ));
             }
+            "ref" => {}
             "cmd" => {
                 let cmd = value.split_whitespace().next().unwrap_or(value);
                 let allowed = config.lint.allowed_commands.iter().any(|c| c == cmd);
@@ -50,44 +49,42 @@ pub fn check(
                     ));
                 }
             }
-            "skill" => {
+            "skill"
                 if !all_sources.iter().any(|s| s.name == value)
-                    && !skills_src_dir.join(value).is_dir()
-                {
-                    diags.push(diag_located(
-                        Severity::Error,
-                        &source.name,
-                        "stale-skill-ref",
-                        format!("skill '{value}' not found in workspace"),
-                        Some(file_path.clone()),
-                        Some(line_no),
-                    ));
-                }
+                    && !skills_src_dir.join(value).is_dir() =>
+            {
+                diags.push(diag_located(
+                    Severity::Error,
+                    &source.name,
+                    "stale-skill-ref",
+                    format!("skill '{value}' not found in workspace"),
+                    Some(file_path.clone()),
+                    Some(line_no),
+                ));
             }
-            "var" => {
-                if !config.vars.contains_key(value) {
-                    diags.push(diag_located(
-                        Severity::Error,
-                        &source.name,
-                        "stale-var-ref",
-                        format!("var '{value}' not declared in [vars]"),
-                        Some(file_path.clone()),
-                        Some(line_no),
-                    ));
-                }
+            "skill" => {}
+            "var" if !config.vars.contains_key(value) => {
+                diags.push(diag_located(
+                    Severity::Error,
+                    &source.name,
+                    "stale-var-ref",
+                    format!("var '{value}' not declared in [vars]"),
+                    Some(file_path.clone()),
+                    Some(line_no),
+                ));
             }
-            "env" => {
-                if !config.env.contains_key(value) {
-                    diags.push(diag_located(
-                        Severity::Error,
-                        &source.name,
-                        "stale-env-ref",
-                        format!("env '{value}' not declared in [env]"),
-                        Some(file_path.clone()),
-                        Some(line_no),
-                    ));
-                }
+            "var" => {}
+            "env" if !config.env.contains_key(value) => {
+                diags.push(diag_located(
+                    Severity::Error,
+                    &source.name,
+                    "stale-env-ref",
+                    format!("env '{value}' not declared in [env]"),
+                    Some(file_path.clone()),
+                    Some(line_no),
+                ));
             }
+            "env" => {}
             _ => {}
         }
     }
