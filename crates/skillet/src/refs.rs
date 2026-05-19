@@ -41,7 +41,7 @@ impl RefKind {
 }
 
 /// A parsed typed ref directive with its position in the source text.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedRef {
     /// The kind of this ref.
     pub kind: RefKind,
@@ -91,7 +91,7 @@ pub(crate) static MARKDOWN_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
 
 /// A parsed markdown link target with classification and source position.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MarkdownLink {
     /// Display text of the link.
     pub text: String,
@@ -130,7 +130,7 @@ pub fn extract_markdown_links(text: &str) -> Vec<MarkdownLink> {
 }
 
 /// An untyped backtick whose content has been classified by the Layer 3 heuristic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UntypedRef {
     /// Raw content between the backticks (trimmed).
     pub content: String,
@@ -147,7 +147,7 @@ pub struct UntypedRef {
 /// Build this with [`ParsedRefs::extract`] and pass it to lint rules so that
 /// each rule reads pre-collected, pre-positioned data rather than re-scanning
 /// the raw text.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ParsedRefs {
     /// Typed ref directives (`ref::`, `cmd::`, `skill::`, `var::`, `env::`).
     pub typed: Vec<TypedRef>,

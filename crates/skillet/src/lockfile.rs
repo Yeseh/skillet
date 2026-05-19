@@ -84,6 +84,11 @@ pub struct SkillEntry {
     /// Structured refs detected in the compiled output.
     #[serde(default, skip_serializing_if = "SkillRefs::is_empty")]
     pub refs: SkillRefs,
+    /// MinHash signature (128 × u64) for duplication detection.
+    /// Populated by `skillet lint` and preserved by `skillet build` when the
+    /// compiled output is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub minhash: Vec<u64>,
 }
 
 /// The full contents of `skillet.lock`.
@@ -154,6 +159,7 @@ mod tests {
                     commands: vec!["git".into()],
                     ..Default::default()
                 },
+                minhash: vec![],
             },
         );
         lf.fragments.insert(

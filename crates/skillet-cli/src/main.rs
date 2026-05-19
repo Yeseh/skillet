@@ -71,12 +71,18 @@ enum Commands {
     Lint {
         /// Name of a single skill to lint (lints all if omitted)
         name: Option<String>,
+        /// Lint only this specific source file (single-file mode for editors)
+        #[arg(long, value_name = "PATH")]
+        file: Option<std::path::PathBuf>,
         /// Promote warnings to errors
         #[arg(long)]
         strict: bool,
         /// Show info-level diagnostics
         #[arg(long)]
         pedantic: bool,
+        /// Print per-phase timing after results
+        #[arg(long)]
+        verbose: bool,
         /// Output format
         #[arg(long)]
         format: Option<FormatArg>,
@@ -134,8 +140,10 @@ fn main() -> Result<()> {
         }
         Commands::Lint {
             name,
+            file,
             strict,
             pedantic,
+            verbose,
             format,
         } => {
             let cwd = std::env::current_dir()?;
@@ -143,7 +151,9 @@ fn main() -> Result<()> {
                 Some(FormatArg::Json) => skillet::lint::OutputFormat::Json,
                 None => skillet::lint::OutputFormat::Text,
             };
-            let opts = skillet::lint::LintOptions::new(strict, pedantic, fmt);
+            let mut opts = skillet::lint::LintOptions::new(strict, pedantic, fmt);
+            opts.file_path = file;
+            opts.verbose = verbose;
             let clean = skillet::lint::run(&cwd, name.as_deref(), &opts)?;
             if !clean {
                 std::process::exit(1);

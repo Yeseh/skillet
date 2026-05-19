@@ -313,6 +313,14 @@ fn compile_skill(
 
     let source_hash = workspace::hash_file(&source.source_path)?;
     let compiled_hash = hash_bytes(output.as_bytes());
+
+    // Preserve cached MinHash signature when the compiled output is unchanged.
+    let old_minhash = lockfile
+        .skills
+        .get(&source.name)
+        .filter(|e| e.compiled_hash == compiled_hash)
+        .map(|e| e.minhash.clone())
+        .unwrap_or_default();
     let refs = collect_structured_refs(&output);
 
     // Token counts
@@ -352,6 +360,7 @@ fn compile_skill(
             transitive_tokens,
             fragments_used,
             refs,
+            minhash: old_minhash,
         },
     );
 

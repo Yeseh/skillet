@@ -1059,6 +1059,7 @@ dependencies = [
  "gray_matter",
  "hex",
  "owo-colors",
+ "rayon",
  "regex",
  "rustls",
  "serde",

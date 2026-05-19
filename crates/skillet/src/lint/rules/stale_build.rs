@@ -1,12 +1,14 @@
 //! Rule: `stale-build` — verifies the compiled `SKILL.md` matches the source.
 
+use crate::lint::pipeline::SourceFile;
 use crate::lockfile::Lockfile;
-use crate::workspace::{hash_file, SkillSource};
+use crate::workspace::hash_file;
 use std::path::Path;
 
 use super::{diag, Diagnostic, Severity};
 
-pub fn check(source: &SkillSource, fragments_dir: &Path, lockfile: &Lockfile) -> Vec<Diagnostic> {
+/// Checks staleness using the pre-computed source hash from Phase 1.
+pub fn check(source: &SourceFile, fragments_dir: &Path, lockfile: &Lockfile) -> Vec<Diagnostic> {
     let output_path = source.skill_out_dir.join("SKILL.md");
 
     if !output_path.exists() {
@@ -27,25 +29,37 @@ pub fn check(source: &SkillSource, fragments_dir: &Path, lockfile: &Lockfile) ->
         )];
     };
 
-    let source_hash = match hash_file(&source.source_path) {
-        Ok(h) => h,
-        Err(e) => {
-            return vec![diag(
-                Severity::Error,
-                &source.name,
-                "stale-build",
-                format!("cannot hash source: {e}"),
-            )]
-        }
-    };
-
-    if source_hash != entry.source_hash {
+    // Use the pre-computed hash from Phase 1 — no re-hashing.
+    if !source.source_hash.is_empty() && source.source_hash != entry.source_hash {
         return vec![diag(
             Severity::Error,
             &source.name,
             "stale-build",
             "SKILL.md is out of date — run `skillet build`".into(),
         )];
+    }
+
+    // If Phase 1 didn't produce a hash (read error), fall back to hashing now.
+    if source.source_hash.is_empty() {
+        match hash_file(&source.source_path) {
+            Ok(h) if h != entry.source_hash => {
+                return vec![diag(
+                    Severity::Error,
+                    &source.name,
+                    "stale-build",
+                    "SKILL.md is out of date — run `skillet build`".into(),
+                )];
+            }
+            Err(e) => {
+                return vec![diag(
+                    Severity::Error,
+                    &source.name,
+                    "stale-build",
+                    format!("cannot hash source: {e}"),
+                )];
+            }
+            _ => {}
+        }
     }
 
     for frag_name in &entry.fragments_used {

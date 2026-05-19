@@ -1,14 +1,15 @@
 //! Rule: `untyped-backtick` — nudges authors toward explicit ref annotations.
 
-use crate::refs::ParsedRefs;
-use crate::workspace::SkillSource;
+use crate::lint::pipeline::SourceFile;
 
 use super::{diag_located, Diagnostic, Severity};
 
-pub fn check(source: &SkillSource, parsed: &ParsedRefs) -> Vec<Diagnostic> {
+/// Emits info diagnostics for untyped backticks using pre-extracted data from Phase 2.
+pub fn check(source: &SourceFile) -> Vec<Diagnostic> {
     let file_path = source.source_path.to_string_lossy().to_string();
 
-    parsed
+    source
+        .parsed_refs
         .untyped
         .iter()
         .map(|u| {

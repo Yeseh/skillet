@@ -1,23 +1,25 @@
 //! Rules: `stale-path-ref`, `stale-command-ref`, `stale-skill-ref`.
 
 use crate::config::SkilletConfig;
-use crate::refs::{ParsedRefs, RefKind};
+use crate::lint::pipeline::SourceFile;
 use crate::workspace::{self, SkillSource};
 use std::path::Path;
 
 use super::{diag_located, Diagnostic, Severity};
 
+/// Validates all typed refs in the pre-extracted `parsed_refs` from Phase 2.
 pub fn check(
-    source: &SkillSource,
-    parsed: &ParsedRefs,
+    source: &SourceFile,
     config: &SkilletConfig,
     all_sources: &[SkillSource],
     skills_src_dir: &Path,
 ) -> Vec<Diagnostic> {
+    use crate::refs::RefKind;
+
     let mut diags = Vec::new();
     let file_path = source.source_path.to_string_lossy().to_string();
 
-    for tr in &parsed.typed {
+    for tr in &source.parsed_refs.typed {
         match tr.kind {
             RefKind::Ref if !source.skill_dir.join(&tr.value).exists() => {
                 diags.push(diag_located(

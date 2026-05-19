@@ -7,7 +7,7 @@ use walkdir::WalkDir;
 
 /// A discovered skill source file within the workspace.
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SkillSource {
     /// The skill's directory name, used as its identifier.
     pub name: String,
