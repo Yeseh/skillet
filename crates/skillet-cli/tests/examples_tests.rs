@@ -1,4 +1,3 @@
-#![allow(missing_docs)]
 
 mod common;
 
@@ -8,7 +7,7 @@ use std::path::Path;
 #[test]
 fn all_example_workspaces_build_successfully() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let examples_dir = manifest_dir.join("examples");
+    let examples_dir = manifest_dir.join("../../examples");
 
     assert!(
         examples_dir.is_dir(),

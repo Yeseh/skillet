@@ -2,10 +2,10 @@
 
 use anyhow::{bail, Result};
 
-static BUNDLED_SKILLS: &[(&str, &str)] = &[(
-    "skillet",
-    include_str!("../skills/skillet/SKILL.md"),
-)];
+static BUNDLED_SKILLS: &[(&str, &str)] = &[
+    ("skillet", include_str!("../../../skills/skillet/SKILL.md")),
+    ("migrate", include_str!("../../../skills/migrate/SKILL.md")),
+];
 
 /// Prints the compiled content of the named bundled skill to stdout.
 ///

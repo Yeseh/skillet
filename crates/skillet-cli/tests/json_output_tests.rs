@@ -1,4 +1,3 @@
-#![allow(missing_docs)]
 
 mod common;
 
@@ -31,7 +30,7 @@ fn init_json_produces_clean_json_on_stdout() {
 }
 
 #[test]
-fn init_json_exit_code_matches_human_mode() {
+fn init_json_exit_code_matches_default() {
     let tmp_h = TempDir::new().unwrap();
     let out_h = common::run_skillet(tmp_h.path(), &["init"]);
     let tmp_j = TempDir::new().unwrap();
@@ -62,7 +61,7 @@ fn new_json_produces_clean_json_on_stdout() {
 }
 
 #[test]
-fn new_json_exit_code_matches_human_mode() {
+fn new_json_exit_code_matches_default() {
     let tmp_h = TempDir::new().unwrap();
     common::run_skillet(tmp_h.path(), &["init"]);
     let out_h = common::run_skillet(tmp_h.path(), &["new", "my-skill"]);
@@ -99,7 +98,7 @@ fn build_json_produces_clean_json_on_stdout() {
 }
 
 #[test]
-fn build_json_exit_code_matches_human_mode() {
+fn build_json_exit_code_matches_default() {
     let tmp_h = TempDir::new().unwrap();
     common::run_skillet(tmp_h.path(), &["init"]);
     common::run_skillet(tmp_h.path(), &["new", "my-skill"]);
@@ -134,7 +133,7 @@ fn budget_json_includes_skills_and_totals() {
 }
 
 #[test]
-fn budget_json_stdout_clean_no_human_text() {
+fn budget_json_stdout_is_clean_json() {
     let tmp = setup_workspace_with_skill("my-skill");
     let out = common::run_skillet(tmp.path(), &["budget", "--format", "json"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -186,7 +185,7 @@ fn check_json_stale_skill_has_diff_entries() {
 }
 
 #[test]
-fn check_json_exit_code_matches_human_mode() {
+fn check_json_exit_code_matches_default() {
     // Both fresh
     let tmp_h = setup_workspace_with_skill("my-skill");
     let out_h = common::run_skillet(tmp_h.path(), &["check"]);
@@ -240,7 +239,7 @@ fn lint_json_diagnostic_has_required_fields() {
 }
 
 #[test]
-fn lint_json_exit_code_matches_human_mode() {
+fn lint_json_exit_code_matches_default() {
     // Clean workspace
     let tmp_h = setup_workspace_with_skill("my-skill");
     let out_h = common::run_skillet(tmp_h.path(), &["lint"]);

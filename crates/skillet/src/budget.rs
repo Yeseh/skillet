@@ -59,9 +59,9 @@ pub struct BudgetReport {
 /// Output format for budget results.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OutputFormat {
-    /// Human-readable table.
+    /// Default text output.
     #[default]
-    Human,
+    Text,
     /// Machine-parseable JSON array.
     Json,
 }
@@ -96,7 +96,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, format: OutputFormat) -> 
     }
 
     match format {
-        OutputFormat::Human => print_human(&rows),
+        OutputFormat::Text => print_text(&rows),
         OutputFormat::Json => print_json_report(&rows)?,
     }
 
@@ -217,7 +217,7 @@ fn compute_row_from_disk(
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-fn print_human(rows: &[BudgetRow]) {
+fn print_text(rows: &[BudgetRow]) {
     if rows.is_empty() {
         println!("No skills found.");
         return;

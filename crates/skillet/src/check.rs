@@ -13,9 +13,9 @@ use std::path::Path;
 /// How results are rendered.
 #[derive(Clone, Copy, Default)]
 pub enum OutputFormat {
-    /// Human-readable output (default).
+    /// Default text output.
     #[default]
-    Human,
+    Text,
     /// Machine-parseable JSON output.
     Json,
 }
@@ -27,7 +27,7 @@ pub struct SkillResult {
     pub name: String,
     /// `true` when source hash **and** compiled hash both match the lockfile.
     pub fresh: bool,
-    /// Human-readable reasons this skill is considered stale (empty when fresh).
+    /// Reasons this skill is considered stale (empty when fresh).
     pub reasons: Vec<String>,
     /// Machine-readable difference entries (populated in JSON mode; empty when fresh).
     pub diffs: Vec<DiffEntry>,
@@ -229,7 +229,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Human => render_human(&report),
+        OutputFormat::Text => render(&report),
     }
 
     Ok(all_fresh)
@@ -237,7 +237,7 @@ pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
 
 // ── rendering ────────────────────────────────────────────────────────────────
 
-fn render_human(report: &CheckReport) {
+fn render(report: &CheckReport) {
     let stale: Vec<&SkillResult> = report.skills.iter().filter(|r| !r.fresh).collect();
 
     if stale.is_empty() {
@@ -301,7 +301,7 @@ mod tests {
         setup_built_workspace(tmp.path());
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert
         assert!(ok);
@@ -322,7 +322,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert
         assert!(!ok);
@@ -340,7 +340,7 @@ mod tests {
         fs::write(&skill_md, format!("{}\n<!-- tampered -->", original)).unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert
         assert!(!ok);
@@ -356,7 +356,7 @@ mod tests {
         fs::remove_file(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert
         assert!(!ok);
@@ -371,7 +371,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("skills")).unwrap();
 
         // Act — no skillet.lock present
-        let result = run(tmp.path(), OutputFormat::Human);
+        let result = run(tmp.path(), OutputFormat::Text);
 
         // Assert
         assert!(result.is_err());
@@ -401,7 +401,7 @@ mod tests {
         fs::remove_dir_all(tmp.path().join("skills/my-skill")).unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert — lockfile still references my-skill → stale
         assert!(!ok);
@@ -423,7 +423,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert — new skill not in lockfile → stale
         assert!(!ok);
@@ -461,7 +461,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Human).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
 
         // Assert — fragment changed → stale
         assert!(!ok, "check should report stale when fragment has changed");

@@ -36,7 +36,7 @@ pub struct Diagnostic {
     pub severity: Severity,
     /// Skill name this applies to, or `"<workspace>"` for workspace-level rules.
     pub skill: String,
-    /// Human-readable description of the problem.
+    /// Description of the problem.
     pub message: String,
     /// File path where the issue was found (when known).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,9 +55,9 @@ pub struct Diagnostic {
 /// Output format for lint results.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OutputFormat {
-    /// Human-readable coloured text.
+    /// Default coloured text output.
     #[default]
-    Human,
+    Text,
     /// Machine-parseable JSON array.
     Json,
 }
@@ -98,6 +98,7 @@ impl LintOptions {
 /// `skillet.toml`).  Individual rule failures are reported as diagnostics, not
 /// as `Err`.
 pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Result<bool> {
+    let start = std::time::Instant::now();
     let config = crate::config::load(workspace)?;
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
@@ -108,6 +109,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
         Some(name) => all_sources.iter().filter(|s| s.name == name).collect(),
         None => all_sources.iter().collect(),
     };
+    let files_scanned = targets.len();
 
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
@@ -145,9 +147,10 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Re
     }
 
     let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
+    let elapsed_ms = start.elapsed().as_millis();
 
     match opts.format {
-        OutputFormat::Human => print_human(&diagnostics),
+        OutputFormat::Text => print_text(&diagnostics, files_scanned, elapsed_ms),
         OutputFormat::Json => print_json(&diagnostics)?,
     }
 
@@ -261,28 +264,46 @@ pub(crate) fn diag_located(
 
 // ── Output ────────────────────────────────────────────────────────────────────
 
-fn print_human(diagnostics: &[Diagnostic]) {
+fn print_text(diagnostics: &[Diagnostic], files_scanned: usize, elapsed_ms: u128) {
     if diagnostics.is_empty() {
         println!("{}", "no issues found".green());
-        return;
+    } else {
+        for d in diagnostics {
+            let tag = match d.severity {
+                Severity::Error => "error".red().bold().to_string(),
+                Severity::Warning => "warning".yellow().bold().to_string(),
+                Severity::Info => "info".cyan().bold().to_string(),
+            };
+            println!("[{tag}] {} ({}): {}", d.skill, d.rule, d.message);
+        }
+        let errors = diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count();
+        let warnings = diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .count();
+        let infos = diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Info)
+            .count();
+        if infos > 0 {
+            println!("\n{} error(s), {} warning(s), {} info(s)", errors, warnings, infos);
+        } else {
+            println!("\n{} error(s), {} warning(s)", errors, warnings);
+        }
     }
-    for d in diagnostics {
-        let tag = match d.severity {
-            Severity::Error => "error".red().bold().to_string(),
-            Severity::Warning => "warning".yellow().bold().to_string(),
-            Severity::Info => "info".cyan().bold().to_string(),
-        };
-        println!("[{tag}] {} ({}): {}", d.skill, d.rule, d.message);
-    }
-    let errors = diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .count();
-    let warnings = diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Warning)
-        .count();
-    println!("\n{} error(s), {} warning(s)", errors, warnings);
+    println!(
+        "{}",
+        format!(
+            "scanned {} file{} in {}ms",
+            files_scanned,
+            if files_scanned == 1 { "" } else { "s" },
+            elapsed_ms
+        )
+        .dimmed()
+    );
 }
 
 fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {

@@ -1,4 +1,3 @@
-#![allow(missing_docs)]
 
 mod common;
 
@@ -164,7 +163,7 @@ fn budget_runs_on_built_workspace() {
     skillet::build::run(tmp.path(), None, &Default::default()).unwrap();
 
     // Act — should not error
-    let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Human);
+    let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Text);
 
     // Assert
     assert!(
@@ -212,7 +211,7 @@ fn budget_single_skill_succeeds() {
     let result = skillet::budget::run(
         tmp.path(),
         Some("alpha"),
-        skillet::budget::OutputFormat::Human,
+        skillet::budget::OutputFormat::Text,
     );
 
     // Assert
@@ -237,7 +236,7 @@ fn budget_errors_when_skill_not_built() {
     let result = skillet::budget::run(
         tmp.path(),
         Some("unbuilt"),
-        skillet::budget::OutputFormat::Human,
+        skillet::budget::OutputFormat::Text,
     );
 
     // Assert

@@ -852,7 +852,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "clap",
  "gray_matter",
  "hex",
  "owo-colors",
@@ -866,6 +865,18 @@ dependencies = [
  "toml",
  "walkdir",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "skillet-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "skillet",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

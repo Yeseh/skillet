@@ -26,7 +26,7 @@ Skillet is a Rust CLI for authoring skills in lightweight `.pan` files and compi
 ## Quick start
 
 ```bash
-cargo install --git https://github.com/Yeseh/skillet.git
+cargo install --git https://github.com/Yeseh/skillet.git --package skillet-cli
 skillet init
 skillet new my-skill
 skillet build

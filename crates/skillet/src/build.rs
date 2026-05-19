@@ -35,7 +35,7 @@ impl BuildOptions {
         Self {
             offline,
             strict,
-            format: OutputFormat::Human,
+            format: OutputFormat::Text,
         }
     }
 
@@ -52,9 +52,9 @@ impl BuildOptions {
 /// Output format for build results.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum OutputFormat {
-    /// Human-readable output (default).
+    /// Default text output.
     #[default]
-    Human,
+    Text,
     /// Machine-parseable JSON.
     Json,
 }
@@ -135,7 +135,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &BuildOptions) -> R
             &skills_src_dir,
             &mut lockfile,
         )?;
-        if opts.format == OutputFormat::Human {
+        if opts.format != OutputFormat::Json {
             println!("built {}", source.name);
         }
         skills_built.push(source.name.clone());
@@ -152,7 +152,7 @@ pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &BuildOptions) -> R
             &lockfile,
             opts.strict,
             &mut warnings,
-            opts.format == OutputFormat::Human,
+            opts.format != OutputFormat::Json,
         )?;
     }
 
@@ -174,7 +174,7 @@ fn verify_urls_from_lockfile(
     lockfile: &crate::lockfile::Lockfile,
     strict: bool,
     warnings: &mut Vec<String>,
-    human: bool,
+    verbose: bool,
 ) -> Result<()> {
     use crate::net::url_verify::{verify_urls, UrlCheckResult};
     use owo_colors::OwoColorize;
@@ -191,7 +191,7 @@ fn verify_urls_from_lockfile(
         return Ok(());
     }
 
-    if human {
+    if verbose {
         println!("checking {} URL(s)…", urls.len());
     }
     let outcomes = verify_urls(&urls);
@@ -203,7 +203,7 @@ fn verify_urls_from_lockfile(
             UrlCheckResult::Broken(code) => {
                 let msg = format!("broken-url: {} ({})", outcome.url, code);
                 warnings.push(msg);
-                if human {
+                if verbose {
                     eprintln!(
                         "{} {} ({})",
                         "warning[broken-url]:".yellow(),
@@ -216,7 +216,7 @@ fn verify_urls_from_lockfile(
             UrlCheckResult::PossiblyDown(code) => {
                 let msg = format!("url-possibly-down: {} ({})", outcome.url, code);
                 warnings.push(msg);
-                if human {
+                if verbose {
                     eprintln!(
                         "{} {} ({})",
                         "info[url-possibly-down]:".cyan(),
@@ -228,7 +228,7 @@ fn verify_urls_from_lockfile(
             UrlCheckResult::Unreachable(reason) => {
                 let msg = format!("unreachable-url: {} — {}", outcome.url, reason);
                 warnings.push(msg);
-                if human {
+                if verbose {
                     eprintln!(
                         "{} {} — {}",
                         "warning[unreachable-url]:".yellow(),
@@ -241,7 +241,7 @@ fn verify_urls_from_lockfile(
             UrlCheckResult::Rejected(reason) => {
                 let msg = format!("rejected-url: {} — {}", outcome.url, reason);
                 warnings.push(msg);
-                if human {
+                if verbose {
                     eprintln!(
                         "{} {} — {}",
                         "warning[rejected-url]:".yellow(),
