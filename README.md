@@ -4,6 +4,12 @@
     </p>
 
   <p align="center">
+    <a href="https://github.com/Yeseh/skillet/actions/workflows/ci.yml">
+      <img src="https://github.com/Yeseh/skillet/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status" />
+    </a>
+  </p>
+
+  <p align="center">
     <strong>
         Toolkit for developing AI agents, skills, and prompts with Markdown
     </strong>
