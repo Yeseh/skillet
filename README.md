@@ -1,3 +1,17 @@
+<div align="center">
+  <h1><code>Skillet</code></h1>
+
+  <p>
+    <strong>
+        Toolkit for developing AI agents, skills, and prompts with Markdown
+    </strong>
+  </p>
+</div>
+
+<p align="center">
+  <img src="assets/logo.png" alt="Skillet" width="200" />
+</p>
+
 # Skillet
 
 Skillet is a Rust CLI for authoring, compiling, linting, and budgeting AI agent skills.
