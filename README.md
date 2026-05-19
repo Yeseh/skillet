@@ -60,6 +60,13 @@ cargo install --path .
 skillet init
 ```
 
+To install directly from GitHub without cloning:
+
+```bash
+cargo install --git https://github.com/Yeseh/skillet.git
+skillet init
+```
+
 ## Core workflow
 
 ### 1. Initialize a workspace
@@ -276,6 +283,16 @@ It records:
 - fragment usage
 - structured refs
 - build metadata
+
+## Editor setup
+
+To get Markdown syntax highlighting for `.pan` files in VS Code, add this to your `settings.json`:
+
+```json
+"files.associations": {
+    "*.pan": "markdown"
+}
+```
 
 ## Development
 
