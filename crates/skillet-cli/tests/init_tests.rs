@@ -3,6 +3,14 @@ mod common;
 use std::fs;
 use tempfile::TempDir;
 
+fn setup_workspace(tmp: &std::path::Path) {
+    let cfg = skillet::config::SkilletConfig::default();
+    fs::write(tmp.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
+    fs::create_dir_all(tmp.join(&cfg.workspace.skills_src_dir)).unwrap();
+    fs::create_dir_all(tmp.join(&cfg.workspace.skills_out_dir)).unwrap();
+    fs::create_dir_all(tmp.join(&cfg.workspace.fragments_dir)).unwrap();
+}
+
 #[test]
 fn init_creates_skills_dir_fragments_dir_and_config() {
     // Arrange
@@ -151,7 +159,7 @@ fn init_adopt_copies_skill_md_as_dot_pan_files() {
 fn budget_runs_on_built_workspace() {
     // Arrange
     let tmp = TempDir::new().unwrap();
-    skillet::init::run(tmp.path(), false, false).unwrap();
+    setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/my-skill");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -159,10 +167,21 @@ fn budget_runs_on_built_workspace() {
         "---\nname: my-skill\ndescription: \"does stuff\"\n---\n\n## Usage\nrun it\n",
     )
     .unwrap();
-    skillet::build::run(tmp.path(), None, &Default::default()).unwrap();
+    skillet::compile::run(
+        tmp.path(),
+        None,
+        &Default::default(),
+        &skillet::config::SkilletConfig::default(),
+    )
+    .unwrap();
 
     // Act — should not error
-    let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Text);
+    let result = skillet::budget::run(
+        tmp.path(),
+        None,
+        skillet::budget::OutputFormat::Text,
+        &skillet::config::SkilletConfig::default(),
+    );
 
     // Assert
     assert!(
@@ -175,7 +194,7 @@ fn budget_runs_on_built_workspace() {
 fn budget_json_format_produces_array() {
     // Arrange
     let tmp = TempDir::new().unwrap();
-    skillet::init::run(tmp.path(), false, false).unwrap();
+    setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/my-skill");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -183,10 +202,21 @@ fn budget_json_format_produces_array() {
         "---\nname: my-skill\ndescription: \"a skill\"\n---\n\n## Body\ncontent here\n",
     )
     .unwrap();
-    skillet::build::run(tmp.path(), None, &Default::default()).unwrap();
+    skillet::compile::run(
+        tmp.path(),
+        None,
+        &Default::default(),
+        &skillet::config::SkilletConfig::default(),
+    )
+    .unwrap();
 
     // Act
-    let result = skillet::budget::run(tmp.path(), None, skillet::budget::OutputFormat::Json);
+    let result = skillet::budget::run(
+        tmp.path(),
+        None,
+        skillet::budget::OutputFormat::Json,
+        &skillet::config::SkilletConfig::default(),
+    );
 
     // Assert
     assert!(result.is_ok());
@@ -196,7 +226,7 @@ fn budget_json_format_produces_array() {
 fn budget_single_skill_succeeds() {
     // Arrange
     let tmp = TempDir::new().unwrap();
-    skillet::init::run(tmp.path(), false, false).unwrap();
+    setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/alpha");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -204,13 +234,20 @@ fn budget_single_skill_succeeds() {
         "---\nname: alpha\ndescription: \"alpha skill\"\n---\n\n## Alpha\ncontent\n",
     )
     .unwrap();
-    skillet::build::run(tmp.path(), Some("alpha"), &Default::default()).unwrap();
+    skillet::compile::run(
+        tmp.path(),
+        Some("alpha"),
+        &Default::default(),
+        &skillet::config::SkilletConfig::default(),
+    )
+    .unwrap();
 
     // Act
     let result = skillet::budget::run(
         tmp.path(),
         Some("alpha"),
         skillet::budget::OutputFormat::Text,
+        &skillet::config::SkilletConfig::default(),
     );
 
     // Assert
@@ -221,7 +258,7 @@ fn budget_single_skill_succeeds() {
 fn budget_errors_when_skill_not_built() {
     // Arrange
     let tmp = TempDir::new().unwrap();
-    skillet::init::run(tmp.path(), false, false).unwrap();
+    setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/unbuilt");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -236,6 +273,7 @@ fn budget_errors_when_skill_not_built() {
         tmp.path(),
         Some("unbuilt"),
         skillet::budget::OutputFormat::Text,
+        &skillet::config::SkilletConfig::default(),
     );
 
     // Assert

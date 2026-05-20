@@ -1,6 +1,5 @@
 //! Token-budget reporting for the `skillet budget` command.
 
-use crate::config;
 use crate::lockfile;
 use crate::parse::parse_frontmatter;
 use crate::tokens::count_tokens;
@@ -8,6 +7,8 @@ use crate::workspace;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::path::Path;
+
+use crate::config::SkilletConfig;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -75,8 +76,12 @@ pub enum OutputFormat {
 /// # Errors
 ///
 /// Returns an error if the workspace cannot be read.
-pub fn run(workspace: &Path, skill_name: Option<&str>, format: OutputFormat) -> Result<()> {
-    let config = config::load(workspace)?;
+pub fn run(
+    workspace: &Path,
+    skill_name: Option<&str>,
+    format: OutputFormat,
+    config: &SkilletConfig,
+) -> Result<()> {
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
@@ -334,8 +339,7 @@ fn print_json_report(rows: &[BudgetRow]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build;
-    use crate::init;
+    use crate::compile;
     use crate::workspace::SkillSource;
     use std::fs;
     use tempfile::TempDir;
@@ -343,7 +347,11 @@ mod tests {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn init_workspace(dir: &std::path::Path) {
-        init::run(dir, false, false).expect("init failed");
+        let cfg = SkilletConfig::default();
+        fs::write(dir.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.skills_src_dir)).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.skills_out_dir)).unwrap();
+        fs::create_dir_all(dir.join(&cfg.workspace.fragments_dir)).unwrap();
     }
 
     fn make_skill(dir: &std::path::Path, name: &str, description: &str, body: &str) {
@@ -377,7 +385,13 @@ mod tests {
             "does alpha things",
             "## Usage\nrun alpha\n",
         );
-        build::run(tmp.path(), Some("alpha"), &Default::default()).unwrap();
+        compile::run(
+            tmp.path(),
+            Some("alpha"),
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
@@ -407,7 +421,13 @@ mod tests {
             "short desc",
             "## Long body\n".repeat(20).as_str(),
         );
-        build::run(tmp.path(), Some("beta"), &Default::default()).unwrap();
+        compile::run(
+            tmp.path(),
+            Some("beta"),
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
@@ -442,7 +462,13 @@ mod tests {
         )
         .unwrap();
         make_skill(tmp.path(), "gamma", "uses a fragment", "{{> note }}\n");
-        build::run(tmp.path(), Some("gamma"), &Default::default()).unwrap();
+        compile::run(
+            tmp.path(),
+            Some("gamma"),
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();
@@ -461,7 +487,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
         make_skill(tmp.path(), "delta", "no refs here", "## Body\ncontent\n");
-        build::run(tmp.path(), Some("delta"), &Default::default()).unwrap();
+        compile::run(
+            tmp.path(),
+            Some("delta"),
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
         // Act
         let lockfile = lockfile::read(tmp.path()).unwrap();

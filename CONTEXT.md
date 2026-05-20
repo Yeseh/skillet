@@ -12,3 +12,5 @@
 - **Activation cost**: Tokens consumed when a skill is triggered — the full compiled SKILL.md.
 - **Transitive cost**: Activation cost plus all files the skill instructs the agent to read.
 - **Lockfile**: `skillet.lock` — committed workspace-level file recording source hashes, compiled hashes, token counts, fragment usage, and ref inventories per skill. Enables fast staleness checks and PR-diffable impact tracking.
+- **SourceUnit**: A named piece of pre-read source content passed to the lib for compilation or analysis. Carries `name` and `content` (the raw `.pan` text) but no filesystem paths. The generic input type for skills, agent files, and any future compilable source type.
+- **CompileContext**: The full bundle of data the lib needs to compile a single source unit: a `SourceUnit`, resolved fragment contents, and build config. Assembled by the CLI before calling into lib.

@@ -1,3 +1,9 @@
+mod config;
+mod init;
+mod net;
+mod new;
+mod workspace;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -106,12 +112,14 @@ fn main() -> Result<()> {
         Commands::Init { adopt, format } => {
             let cwd = std::env::current_dir()?;
             let json = matches!(format, Some(FormatArg::Json));
-            skillet::init::run(&cwd, adopt, json)?;
+            init::run(&cwd, adopt, json)?;
         }
         Commands::New { name, format } => {
             let cwd = std::env::current_dir()?;
+            let cfg = config::load(&cwd)?;
             let json = matches!(format, Some(FormatArg::Json));
-            skillet::new::run(&cwd, &name, json)?;
+            let skills_src_dir = cwd.join(&cfg.workspace.skills_src_dir);
+            new::run(&skills_src_dir, &name, json)?;
         }
         Commands::Build {
             name,
@@ -120,12 +128,13 @@ fn main() -> Result<()> {
             format,
         } => {
             let cwd = std::env::current_dir()?;
+            let cfg = config::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => skillet::build::OutputFormat::Json,
                 None => skillet::build::OutputFormat::Text,
             };
             let opts = skillet::build::BuildOptions::new_with_format(offline, strict, fmt.clone());
-            if let Err(err) = skillet::build::run(&cwd, name.as_deref(), &opts) {
+            if let Err(err) = skillet::build::run(&cwd, name.as_deref(), &opts, &cfg) {
                 if fmt == skillet::build::OutputFormat::Text {
                     if let Some(build_failure) = err.downcast_ref::<skillet::build::BuildFailure>()
                     {
@@ -138,22 +147,24 @@ fn main() -> Result<()> {
         }
         Commands::Check { format } => {
             let cwd = std::env::current_dir()?;
+            let cfg = config::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => skillet::check::OutputFormat::Json,
                 None => skillet::check::OutputFormat::Text,
             };
-            let fresh = skillet::check::run(&cwd, fmt)?;
+            let fresh = skillet::check::run(&cwd, fmt, &cfg)?;
             if !fresh {
                 std::process::exit(1);
             }
         }
         Commands::Budget { name, format } => {
             let cwd = std::env::current_dir()?;
+            let cfg = config::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => skillet::budget::OutputFormat::Json,
                 None => skillet::budget::OutputFormat::Text,
             };
-            skillet::budget::run(&cwd, name.as_deref(), fmt)?;
+            skillet::budget::run(&cwd, name.as_deref(), fmt, &cfg)?;
         }
         Commands::Skill { command } => match command {
             SkillCommands::List => skillet::skill::list(),
@@ -168,6 +179,7 @@ fn main() -> Result<()> {
             format,
         } => {
             let cwd = std::env::current_dir()?;
+            let cfg = config::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => skillet::lint::OutputFormat::Json,
                 None => skillet::lint::OutputFormat::Text,
@@ -175,7 +187,7 @@ fn main() -> Result<()> {
             let mut opts = skillet::lint::LintOptions::new(strict, pedantic, fmt);
             opts.file_path = file;
             opts.verbose = verbose;
-            let clean = skillet::lint::run(&cwd, name.as_deref(), &opts)?;
+            let clean = skillet::lint::run(&cwd, name.as_deref(), &opts, &cfg)?;
             if !clean {
                 std::process::exit(1);
             }

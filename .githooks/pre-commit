@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+
+cargo fmt --all -- --check
+cargo fix --allow-dirty --allow-staged

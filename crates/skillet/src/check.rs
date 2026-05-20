@@ -4,7 +4,7 @@
 //! just hashes source files and on-disk `SKILL.md` files and compares them
 //! against the recorded hashes in the lockfile.
 
-use crate::config;
+use crate::config::SkilletConfig;
 use crate::workspace;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -63,9 +63,8 @@ pub struct CheckReport {
 ///
 /// Returns an error if `skillet.lock` is absent, unreadable, or if the
 /// workspace configuration cannot be loaded.
-pub fn run(workspace: &Path, format: OutputFormat) -> Result<bool> {
+pub fn run(workspace: &Path, format: OutputFormat, config: &SkilletConfig) -> Result<bool> {
     // ── load config & discover sources ─────────────────────────────────────
-    let config = config::load(workspace)?;
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
@@ -291,7 +290,7 @@ mod tests {
         .unwrap();
 
         // Run build so the lockfile and SKILL.md are consistent.
-        crate::build::run(tmp, None, &Default::default()).unwrap();
+        crate::compile::run(tmp, None, &Default::default(), &cfg).unwrap();
     }
 
     #[test]
@@ -301,7 +300,7 @@ mod tests {
         setup_built_workspace(tmp.path());
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert
         assert!(ok);
@@ -322,7 +321,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert
         assert!(!ok);
@@ -340,7 +339,7 @@ mod tests {
         fs::write(&skill_md, format!("{}\n<!-- tampered -->", original)).unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert
         assert!(!ok);
@@ -356,7 +355,7 @@ mod tests {
         fs::remove_file(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert
         assert!(!ok);
@@ -371,7 +370,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("skills")).unwrap();
 
         // Act — no skillet.lock present
-        let result = run(tmp.path(), OutputFormat::Text);
+        let result = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default());
 
         // Assert
         assert!(result.is_err());
@@ -385,7 +384,7 @@ mod tests {
         setup_built_workspace(tmp.path());
 
         // Act — just ensure it doesn't error and returns Ok(true)
-        let ok = run(tmp.path(), OutputFormat::Json).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Json, &SkilletConfig::default()).unwrap();
 
         // Assert
         assert!(ok);
@@ -401,7 +400,7 @@ mod tests {
         fs::remove_dir_all(tmp.path().join("skills/my-skill")).unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert — lockfile still references my-skill → stale
         assert!(!ok);
@@ -423,7 +422,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert — new skill not in lockfile → stale
         assert!(!ok);
@@ -451,7 +450,13 @@ mod tests {
             "---\nname: my-skill\ndescription: \"test\"\n---\n\n{{> note }}\n",
         )
         .unwrap();
-        crate::build::run(tmp.path(), None, &Default::default()).unwrap();
+        crate::compile::run(
+            tmp.path(),
+            None,
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
         // Edit the fragment without rebuilding
         fs::write(
@@ -461,7 +466,7 @@ mod tests {
         .unwrap();
 
         // Act
-        let ok = run(tmp.path(), OutputFormat::Text).unwrap();
+        let ok = run(tmp.path(), OutputFormat::Text, &SkilletConfig::default()).unwrap();
 
         // Assert — fragment changed → stale
         assert!(!ok, "check should report stale when fragment has changed");

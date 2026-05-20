@@ -121,10 +121,14 @@ impl LintOptions {
 /// Returns an error only if the workspace cannot be read (e.g. missing
 /// `skillet.toml`).  Individual rule failures are reported as diagnostics, not
 /// as `Err`.
-pub fn run(workspace: &Path, skill_name: Option<&str>, opts: &LintOptions) -> Result<bool> {
+pub fn run(
+    workspace: &Path,
+    skill_name: Option<&str>,
+    opts: &LintOptions,
+    config: &SkilletConfig,
+) -> Result<bool> {
     let total_start = std::time::Instant::now();
 
-    let config = crate::config::load(workspace)?;
     let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace.join(&config.workspace.fragments_dir);
@@ -662,9 +666,21 @@ mod tests {
             "---\nname: good\ndescription: a good skill\n---\n\n# Good\n",
         )
         .unwrap();
-        crate::build::run(tmp.path(), Some("good"), &Default::default()).unwrap();
+        crate::compile::run(
+            tmp.path(),
+            Some("good"),
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
-        let clean = run(tmp.path(), None, &LintOptions::default()).unwrap();
+        let clean = run(
+            tmp.path(),
+            None,
+            &LintOptions::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
         assert!(clean);
     }
 
@@ -680,12 +696,14 @@ mod tests {
         )
         .unwrap();
 
-        let clean = run(tmp.path(), None, &LintOptions::default()).unwrap();
+        let clean = run(
+            tmp.path(),
+            None,
+            &LintOptions::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
         assert!(!clean);
-    }
-
-    #[test]
-    fn run_strict_promotes_warnings_to_errors() {
         let tmp = TempDir::new().unwrap();
         init_workspace(tmp.path());
         let skill_src_dir = tmp.path().join("src/skills/my-skill");
@@ -695,7 +713,13 @@ mod tests {
             "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
         )
         .unwrap();
-        crate::build::run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
+        crate::compile::run(
+            tmp.path(),
+            Some("my-skill"),
+            &Default::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
 
         let clean_normal = run(
             tmp.path(),
@@ -704,6 +728,7 @@ mod tests {
                 strict: false,
                 ..Default::default()
             },
+            &SkilletConfig::default(),
         )
         .unwrap();
         let clean_strict = run(
@@ -713,6 +738,7 @@ mod tests {
                 strict: true,
                 ..Default::default()
             },
+            &SkilletConfig::default(),
         )
         .unwrap();
 
@@ -728,7 +754,7 @@ mod tests {
             allowed_commands = []\ndisable = ['stale-build', 'invalid-frontmatter']\n\
             [build]\ntokenizer = 'cl100k_base'\nverify_urls = false\n\
             [vars]\n[env]\n";
-        fs::write(tmp.path().join("skillet.toml"), custom_toml).unwrap();
+        let config: SkilletConfig = toml::from_str(custom_toml).unwrap();
         fs::create_dir_all(tmp.path().join("src/skills")).unwrap();
         fs::create_dir_all(tmp.path().join("skills")).unwrap();
         fs::create_dir_all(tmp.path().join("src/skills/_fragments")).unwrap();
@@ -740,7 +766,7 @@ mod tests {
         )
         .unwrap();
 
-        let clean = run(tmp.path(), None, &LintOptions::default()).unwrap();
+        let clean = run(tmp.path(), None, &LintOptions::default(), &config).unwrap();
         assert!(clean);
     }
 
@@ -756,7 +782,13 @@ mod tests {
         )
         .unwrap();
 
-        let clean = run(tmp.path(), None, &LintOptions::default()).unwrap();
+        let clean = run(
+            tmp.path(),
+            None,
+            &LintOptions::default(),
+            &SkilletConfig::default(),
+        )
+        .unwrap();
         assert!(!clean);
     }
 
@@ -778,7 +810,7 @@ mod tests {
             format: OutputFormat::Silent,
             ..Default::default()
         };
-        let clean = run(tmp.path(), None, &opts).unwrap();
+        let clean = run(tmp.path(), None, &opts, &SkilletConfig::default()).unwrap();
         assert!(!clean, "invalid-frontmatter should fire in --file mode");
     }
 }
