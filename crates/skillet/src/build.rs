@@ -788,7 +788,7 @@ mod tests {
         let src = "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill\n";
 
         // Act
-        let (fm, name, body) = parse_source(src).unwrap();
+        let (fm, name, body, _body_start_line) = parse_source(src).unwrap();
 
         // Assert
         assert_eq!(name, "my-skill");
@@ -859,7 +859,7 @@ mod tests {
         let body = "`ref::foo.sh`";
 
         // Act
-        let result = process_refs(body, tmp.path(), &config, &skills_dir).unwrap();
+        let result = process_refs(body, "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).unwrap();
 
         // Assert
         assert_eq!(result, "`foo.sh`");
@@ -875,6 +875,9 @@ mod tests {
         // Act
         let result = process_refs(
             "deploy to `var::project_name`",
+            "test-skill",
+            tmp.path(),
+            1,
             tmp.path(),
             &config,
             &skills_dir,
@@ -893,7 +896,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act
-        let result = process_refs("ci: `env::CI`", tmp.path(), &config, &skills_dir).unwrap();
+        let result = process_refs("ci: `env::CI`", "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).unwrap();
 
         // Assert — resolves to live env var or falls back to the configured default
         let expected = std::env::var("CI").unwrap_or_else(|_| "false".to_string());
@@ -908,7 +911,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act — "ls" is always on PATH in CI
-        let result = process_refs("`cmd::ls -la`", tmp.path(), &config, &skills_dir).unwrap();
+        let result = process_refs("`cmd::ls -la`", "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).unwrap();
 
         // Assert
         assert_eq!(result, "`ls -la`");
@@ -922,7 +925,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act & Assert
-        assert!(process_refs("`ref::missing.sh`", tmp.path(), &config, &skills_dir).is_err());
+        assert!(process_refs("`ref::missing.sh`", "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).is_err());
     }
 
     #[test]
@@ -933,7 +936,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act & Assert
-        assert!(process_refs("`var::unknown`", tmp.path(), &config, &skills_dir).is_err());
+        assert!(process_refs("`var::unknown`", "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).is_err());
     }
 
     #[test]
@@ -944,7 +947,7 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // Act & Assert
-        assert!(process_refs("`env::UNKNOWN`", tmp.path(), &config, &skills_dir).is_err());
+        assert!(process_refs("`env::UNKNOWN`", "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).is_err());
     }
 
     #[test]
@@ -956,7 +959,7 @@ mod tests {
         fs::create_dir_all(&skills_dir).unwrap();
 
         // Act & Assert
-        assert!(process_refs("`skill::nope`", tmp.path(), &config, &skills_dir).is_err());
+        assert!(process_refs("`skill::nope`", "test-skill", tmp.path(), 1, tmp.path(), &config, &skills_dir).is_err());
     }
 
     // ── run ─────────────────────────────────────────────────────────────────
