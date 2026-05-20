@@ -27,8 +27,10 @@ pub struct LintConfig {
     /// Maximum token budget for a single skill fragment.
     pub max_fragment_tokens: u32,
     /// Shell commands that skills are permitted to invoke (e.g. `"docker"`, `"kubectl"`).
+    #[serde(default)]
     pub allowed_commands: Vec<String>,
     /// Rule IDs to silence (e.g. `"lint-missing-docs"`).  Empty by default.
+    #[serde(default)]
     pub disable: Vec<String>,
 }
 
