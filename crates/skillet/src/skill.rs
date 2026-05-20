@@ -7,6 +7,13 @@ static BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("migrate", include_str!("../../../skills/migrate/SKILL.md")),
 ];
 
+/// Lists all available bundled skill names to stdout.
+pub fn list() {
+    for (name, _) in BUNDLED_SKILLS {
+        println!("{name}");
+    }
+}
+
 /// Prints the compiled content of the named bundled skill to stdout.
 ///
 /// # Errors

@@ -15,6 +15,17 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum SkillCommands {
+    /// List all available bundled skills
+    List,
+    /// Print a bundled skill's content to stdout
+    Print {
+        /// Name of the bundled skill to print
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Initialize a skillet workspace
     Init {
@@ -61,10 +72,11 @@ enum Commands {
         #[arg(long)]
         format: Option<FormatArg>,
     },
-    /// Print a bundled skill's content to stdout
+    /// Work with bundled skills
+    #[command(subcommand_required = true, arg_required_else_help = true)]
     Skill {
-        /// Name of the bundled skill to print
-        name: String,
+        #[command(subcommand)]
+        command: SkillCommands,
     },
     /// Check skills for quality issues
     Lint {
@@ -143,9 +155,10 @@ fn main() -> Result<()> {
             };
             skillet::budget::run(&cwd, name.as_deref(), fmt)?;
         }
-        Commands::Skill { name } => {
-            skillet::skill::run(&name)?;
-        }
+        Commands::Skill { command } => match command {
+            SkillCommands::List => skillet::skill::list(),
+            SkillCommands::Print { name } => skillet::skill::run(&name)?,
+        },
         Commands::Lint {
             name,
             file,
