@@ -407,6 +407,8 @@ fn compile_skill(
     std::fs::write(&output_path, &output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
 
+    copy_skill_subfolders(&source.skill_dir, &source.skill_out_dir)?;
+
     let source_hash = workspace::hash_file(&source.source_path)?;
     let compiled_hash = hash_bytes(output.as_bytes());
 
@@ -765,6 +767,70 @@ fn hash_bytes(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
 }
 
+/// Copies/builds all subdirectories of a skill source dir into the output dir.
+///
+/// `reference/` subfolders are built: `.pan` files become `.md` files.
+/// All other subdirectories are recursively copied 1-to-1.
+fn copy_skill_subfolders(skill_dir: &Path, skill_out_dir: &Path) -> Result<()> {
+    use walkdir::WalkDir;
+    for entry in WalkDir::new(skill_dir)
+        .min_depth(1)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let sub_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let dest_sub_dir = skill_out_dir.join(&sub_name);
+        if sub_name == "reference" {
+            build_reference_dir(path, &dest_sub_dir)?;
+        } else {
+            workspace::copy_dir_recursive(path, &dest_sub_dir)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies a `reference/` source folder into `dest`, renaming `.pan` → `.md`.
+fn build_reference_dir(src: &Path, dest: &Path) -> Result<()> {
+    use walkdir::WalkDir;
+    for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let rel = path.strip_prefix(src).unwrap();
+        if rel == std::path::Path::new("") {
+            continue;
+        }
+        if path.is_dir() {
+            std::fs::create_dir_all(dest.join(rel))
+                .with_context(|| format!("failed to create {}", dest.join(rel).display()))?;
+        } else {
+            let dest_file = if path.extension().and_then(|e| e.to_str()) == Some("pan") {
+                dest.join(rel.with_extension("md"))
+            } else {
+                dest.join(rel)
+            };
+            if let Some(parent) = dest_file.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            std::fs::copy(path, &dest_file).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    path.display(),
+                    dest_file.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,6 +1173,78 @@ mod tests {
 
         // Assert
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_copies_reference_pan_as_md_in_output() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        init_workspace(tmp.path());
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(skill_src_dir.join("reference")).unwrap();
+        fs::write(
+            skill_src_dir.join("my-skill.pan"),
+            "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill\n",
+        )
+        .unwrap();
+        fs::write(
+            skill_src_dir.join("reference/guide.pan"),
+            "# Guide content\n",
+        )
+        .unwrap();
+
+        // Act
+        run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
+
+        // Assert
+        let out_ref = tmp.path().join("skills/my-skill/reference/guide.md");
+        assert!(out_ref.exists(), "reference .md should be written");
+        assert_eq!(
+            fs::read_to_string(out_ref).unwrap(),
+            "# Guide content\n"
+        );
+    }
+
+    #[test]
+    fn run_copies_other_subfolders_verbatim() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        init_workspace(tmp.path());
+        let skill_src_dir = tmp.path().join("src/skills/my-skill");
+        fs::create_dir_all(skill_src_dir.join("scripts")).unwrap();
+        fs::write(
+            skill_src_dir.join("my-skill.pan"),
+            "---\nname: my-skill\ndescription: \"\"\n---\n\n# My Skill\n",
+        )
+        .unwrap();
+        fs::write(skill_src_dir.join("scripts/run.sh"), "#!/bin/sh\n").unwrap();
+
+        // Act
+        run(tmp.path(), Some("my-skill"), &Default::default()).unwrap();
+
+        // Assert
+        let out_script = tmp.path().join("skills/my-skill/scripts/run.sh");
+        assert!(out_script.exists(), "scripts subfolder should be copied");
+        assert_eq!(fs::read_to_string(out_script).unwrap(), "#!/bin/sh\n");
+    }
+
+    #[test]
+    fn build_reference_dir_renames_pan_to_md() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.pan"), "content a").unwrap();
+        fs::write(src.join("sub/b.pan"), "content b").unwrap();
+        let dest = tmp.path().join("dest");
+
+        // Act
+        build_reference_dir(&src, &dest).unwrap();
+
+        // Assert
+        assert!(dest.join("a.md").exists());
+        assert!(dest.join("sub/b.md").exists());
+        assert!(!dest.join("a.pan").exists());
     }
 
     #[test]

@@ -74,6 +74,32 @@ pub fn load_fragment(fragments_dir: &Path, name: &str) -> Result<String> {
     })
 }
 
+/// Recursively copies `src` into `dest`, preserving the directory tree.
+pub(crate) fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let rel = path.strip_prefix(src).unwrap();
+        if rel == std::path::Path::new("") {
+            continue;
+        }
+        let target = dest.join(rel);
+        if path.is_dir() {
+            std::fs::create_dir_all(&target)
+                .with_context(|| format!("failed to create directory {}", target.display()))?;
+        } else {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create directory {}", parent.display())
+                })?;
+            }
+            std::fs::copy(path, &target).with_context(|| {
+                format!("failed to copy {} to {}", path.display(), target.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Returns `"sha256:<hex>"` of the file at `path`.
 pub(crate) fn hash_file(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)
@@ -173,5 +199,26 @@ mod tests {
         // Assert
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing"));
+    }
+
+    #[test]
+    fn copy_dir_recursive_preserves_structure_and_content() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.txt"), "hello").unwrap();
+        fs::write(src.join("sub/b.txt"), "world").unwrap();
+        let dest = tmp.path().join("dest");
+
+        // Act
+        copy_dir_recursive(&src, &dest).unwrap();
+
+        // Assert
+        assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "hello");
+        assert_eq!(
+            fs::read_to_string(dest.join("sub/b.txt")).unwrap(),
+            "world"
+        );
     }
 }
