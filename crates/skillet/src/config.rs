@@ -41,6 +41,7 @@ pub struct BuildConfig {
     /// Tokenizer model used for token counting (e.g. `"cl100k_base"`).
     pub tokenizer: String,
     /// Whether to verify that URLs referenced in skills are reachable.
+    #[serde(default)]
     pub verify_urls: bool,
 }
 
@@ -63,8 +64,10 @@ pub struct SkilletConfig {
     /// Build configuration.
     pub build: BuildConfig,
     /// Freeform template variables available inside skill templates.
+    #[serde(default)]
     pub vars: BTreeMap<String, String>,
     /// Environment variables with their default values.
+    #[serde(default)]
     pub env: BTreeMap<String, EnvVar>,
 }
 
