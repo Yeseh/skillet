@@ -1,3 +1,5 @@
+mod lex;
+
 pub struct SourceLocation {
     /// Line number (1 based)
     pub line: u32,
