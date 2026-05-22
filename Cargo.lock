@@ -1089,6 +1089,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "skillet-compiler"
+version = "0.1.0"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

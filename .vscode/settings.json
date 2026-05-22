@@ -5,4 +5,5 @@
         "**/.cargo/git/checkouts/**/*.rs": true,
         "**/lib/rustlib/src/rust/library/**/*.rs": true,
     },
+    "github.copilot.chat.anthropic.useMessagesApi": true,
 }

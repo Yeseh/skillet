@@ -1,10 +1,13 @@
 [workspace]
-members = ["crates/skillet", "crates/skillet-cli"]
+members = ["crates/skillet", "crates/skillet-cli", "crates/skillet-compiler"]
 resolver = "2"
 
 [profile.release]
 lto = "thin"
 strip = true
+
+[workspace.dependencies]
+anyhow = "1.0.80"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -2 }
