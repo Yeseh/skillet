@@ -24,4 +24,5 @@ rustc-ice-*.txt
 #.idea/
 
 .worktrees/
-goal-run*/.\.claude\worktrees\
+.py/goal
+
