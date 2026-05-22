@@ -2,6 +2,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use skillet::{
     build,
+    config::SkilletConfig,
     lint::{self, LintOptions, OutputFormat},
 };
 use std::fs;
@@ -35,6 +36,7 @@ CI = {default="true"}
 fn setup_workspace(n_skills: usize) -> TempDir {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
+    let cfg = SkilletConfig::default();
 
     fs::write(dir.join("skillet.toml"), CONFIG_TOML).unwrap();
     fs::create_dir_all(dir.join("src/skills")).unwrap();
@@ -57,7 +59,7 @@ fn setup_workspace(n_skills: usize) -> TempDir {
              # {name}\n\n{body}"
         );
         fs::write(skill_src.join(format!("{name}.pan")), &content).unwrap();
-        build::run(dir, Some(&name), &Default::default()).unwrap();
+        build::run(dir, Some(&name), &Default::default(), &cfg).unwrap();
     }
 
     tmp
@@ -65,6 +67,7 @@ fn setup_workspace(n_skills: usize) -> TempDir {
 
 fn bench_lint_scaling(c: &mut Criterion) {
     const SIZES: &[usize] = &[10, 20, 50];
+    let cfg = SkilletConfig::default();
 
     let workspaces: Vec<(usize, TempDir)> =
         SIZES.iter().map(|&n| (n, setup_workspace(n))).collect();
@@ -81,7 +84,7 @@ fn bench_lint_scaling(c: &mut Criterion) {
             b.iter_custom(|iters| {
                 let start = Instant::now();
                 for _ in 0..iters {
-                    lint::run(black_box(tmp.path()), None, &opts).unwrap();
+                    lint::run(black_box(tmp.path()), None, &opts, &cfg).unwrap();
                 }
                 let elapsed = start.elapsed();
                 samples.push(elapsed.as_nanos() as f64 / iters as f64);

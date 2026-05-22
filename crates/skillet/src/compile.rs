@@ -62,6 +62,7 @@ pub struct CompileContext {
 
 /// Result of compiling a single skill.
 #[non_exhaustive]
+#[derive(Debug)]
 pub struct CompileResult {
     /// Compiled `SKILL.md` content.
     pub output: String,
@@ -494,7 +495,9 @@ fn collect_structured_refs(text: &str) -> SkillRefs {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum OutputFormat {
     #[default]
+    /// Plain
     Text,
+    /// Json-encoded BuildReport struct (for machine consumption).
     Json,
 }
 
@@ -502,12 +505,16 @@ pub enum OutputFormat {
 #[non_exhaustive]
 #[derive(Debug, Default)]
 pub struct BuildOptions {
+    /// If true, skip network checks (e.g. URL verification).
     pub offline: bool,
+    /// If true, treat URL verification warnings as errors.
     pub strict: bool,
+    /// Output format for build results (text or JSON)
     pub format: OutputFormat,
 }
 
 impl BuildOptions {
+    /// Creates BuildOptions with default output format (text).
     pub fn new(offline: bool, strict: bool) -> Self {
         Self {
             offline,
@@ -516,6 +523,7 @@ impl BuildOptions {
         }
     }
 
+    /// Creates BuildOptions with the specified output format.
     pub fn new_with_format(offline: bool, strict: bool, format: OutputFormat) -> Self {
         Self {
             offline,
@@ -528,8 +536,11 @@ impl BuildOptions {
 /// Structured report produced by a build run.
 #[derive(Debug, Serialize)]
 pub struct BuildReport {
+    /// Names of skills that were built during this run.
     pub skills_built: Vec<String>,
+    /// Warnings generated during the build (e.g. missing commands or broken URLs).
     pub warnings: Vec<String>,
+    /// Path to the lockfile used during the build.
     pub lockfile_path: String,
 }
 
