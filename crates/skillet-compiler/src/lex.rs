@@ -1,9 +1,9 @@
-use std::{ops::Range};
+use std::ops::Range;
 
 
 pub struct Lexer<'a> {
-    pub src: &'a str,
-    pub pos: usize,
+    src: &'a str,
+    pos: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -18,50 +18,38 @@ pub enum TokenKind {
 
     RefValue,
     RefReference,
-    RefSKill,
+    RefSkill,
     RefAgent,
     RefCmd,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub range: Range<u32>,
 }
 
-impl Token {
-    pub fn new(kind: TokenKind, start: u32, end: u32) -> Self {
-        Token {
-            kind,
-            range: Range {
-                start,
-                end
-            }
-        }
-    }
-}
 
-const AGENT_REF: &'static [u8] = b"agent::";
-const SKILL_REF: &'static [u8] = b"skill::";
-const CMD_REF: &'static [u8]= b"cmd::";
-const REFERENCE_REF: &'static [u8] = b"ref::";
 
-impl <'a> Lexer<'a> {
+const AGENT_REF: &[u8] = b"agent::";
+const SKILL_REF: &[u8] = b"skill::";
+const CMD_REF: &[u8] = b"cmd::";
+const REFERENCE_REF: &[u8] = b"ref::";
+
+impl<'a> Lexer<'a> {
+    // Returns (kind, keyword_len) where keyword_len excludes the trailing "::"
     fn ref_kind_at(src_bytes: &[u8], start: usize) -> Option<(TokenKind, usize)> {
-        match () {
-            _ if src_bytes[start..].starts_with(REFERENCE_REF) => {
-                Some((TokenKind::RefReference, REFERENCE_REF.len()))
-            }
-            _ if src_bytes[start..].starts_with(AGENT_REF) => {
-                Some((TokenKind::RefAgent, AGENT_REF.len()))
-            }
-            _ if src_bytes[start..].starts_with(CMD_REF) => {
-                Some((TokenKind::RefCmd, CMD_REF.len()))
-            }
-            _ if src_bytes[start..].starts_with(SKILL_REF) => {
-                Some((TokenKind::RefSKill, SKILL_REF.len()))
-            }
-            _ => None,
+        let slice = &src_bytes[start..];
+        if slice.starts_with(REFERENCE_REF) {
+            Some((TokenKind::RefReference, REFERENCE_REF.len() - 2))
+        } else if slice.starts_with(AGENT_REF) {
+            Some((TokenKind::RefAgent, AGENT_REF.len() - 2))
+        } else if slice.starts_with(CMD_REF) {
+            Some((TokenKind::RefCmd, CMD_REF.len() - 2))
+        } else if slice.starts_with(SKILL_REF) {
+            Some((TokenKind::RefSkill, SKILL_REF.len() - 2))
+        } else {
+            None
         }
     }
 
@@ -72,23 +60,19 @@ impl <'a> Lexer<'a> {
         }
 
         let start = start_pos as usize;
-        let (kind, prefix_len) = Self::ref_kind_at(src_bytes, start)?;
-        self.pos += prefix_len - 3;
+        let (kind, keyword_len) = Self::ref_kind_at(src_bytes, start)?;
+        // First char was already consumed by next(), advance past the rest of the keyword
+        self.pos += keyword_len - 1;
 
-        Some(Token {
-            kind,
-            range: Range {
-                start: start_pos,
-                end: self.pos as u32,
-            },
-        })
+        Some(self.make_token(kind, start_pos))
     }
 
     pub fn new(src: &'a str) -> Self {
-        Self {
-            src,
-            pos: 0
-        }
+        Self { src, pos: 0 }
+    }
+
+    fn make_token(&self, kind: TokenKind, start: u32) -> Token {
+        Token { kind, range: start..self.pos as u32 }
     }
 
     pub fn next(&mut self) -> Option<u8> {
@@ -112,10 +96,10 @@ impl <'a> Lexer<'a> {
         while let Some(c) = self.next() {
             let start_pos = (self.pos - 1) as u32;
 
-            let token: Token = match c {
+            let token: Option<Token> = match c {
                 b'a' | b's' | b'r' | b'c' => {
-                    self.tick_prefixed_ref_token(start_pos)
-                        .unwrap_or_else(|| self.make_body(start_pos))
+                    Some(self.tick_prefixed_ref_token(start_pos)
+                        .unwrap_or_else(|| self.make_body(start_pos)))
                 },
                 b'`' => {
                     let p1 = self.peek(0);
@@ -124,127 +108,74 @@ impl <'a> Lexer<'a> {
                     // Code fence
                     if p1 == Some(b'`') && p2 == Some(b'`') {
                         self.pos += 2;
-                        self.make_body(start_pos)
+                        Some(self.make_body(start_pos))
                     }
                     // Double tick
                     else if p1 == Some(b'`') {
                         self.pos += 1;
-
-                        tokens.push(
-                            Token::new(
-                                TokenKind::TickDouble, 
-                                start_pos, 
-                                self.pos as u32)
-                        );
-
-                        self.make_body(self.pos as u32)
+                        tokens.push(self.make_token(TokenKind::TickDouble, start_pos));
+                        Some(self.make_body(self.pos as u32))
                     }
                     else {
-                        Token::new(TokenKind::Tick, start_pos, self.pos as u32)
+                        Some(self.make_token(TokenKind::Tick, start_pos))
                     }
                 }
                 b'{' => {
-                    let p1 = self.peek(0);
-                    if p1 != Some(b'>') {
-                        self.make_body(start_pos)
-                    }
-                    else {
+                    if self.peek(0) != Some(b'>') {
+                        Some(self.make_body(start_pos))
+                    } else {
                         self.pos += 1;
-
-                        tokens.push(Token {
-                            kind: TokenKind::FragmentOpen,
-                            range: Range {
-                                start: start_pos,
-                                end: self.pos as u32
-                            }
-                        });
-
-                        self.make_fragment_id(self.pos as u32)
+                        tokens.push(self.make_token(TokenKind::FragmentOpen, start_pos));
+                        Some(self.make_fragment_id(self.pos as u32))
                     }
                 },
                 b'<' => {
-                    let p1 = self.peek(0);
-                    if p1 == Some(b'}') {
+                    if self.peek(0) == Some(b'}') {
                         self.pos += 1;
-                        tokens.push(
-                            Token::new(
-                                TokenKind::FragmentClose, 
-                                start_pos, 
-                                self.pos as u32
-                        ))
-                    };
-
-                    continue;
+                        Some(self.make_token(TokenKind::FragmentClose, start_pos))
+                    } else {
+                        None // bare '<' produces no token
+                    }
                 },
                 b':' => {
-                    let p1 = self.peek(0);
-                    if p1 == Some(b':')  {
+                    if self.peek(0) == Some(b':') {
                         self.pos += 1;
-
-                        tokens.push(Token {
-                            kind: TokenKind::DoubleColon,
-                            range: Range {
-                                start: start_pos,
-                                end: self.pos as u32
-                            }
-                        });
-
-                        self.make_ref_value((self.pos) as u32)
-                    }
-                    else {
-                        self.make_body(start_pos)
+                        tokens.push(self.make_token(TokenKind::DoubleColon, start_pos));
+                        Some(self.make_ref_value(self.pos as u32))
+                    } else {
+                        Some(self.make_body(start_pos))
                     }
                 },
-                _ => self.make_body(start_pos)
+                _ => Some(self.make_body(start_pos))
             };
 
-            tokens.push(token);
+            if let Some(t) = token {
+                tokens.push(t);
+            }
         }
 
-        return tokens;
+        tokens
     }
 
     fn make_fragment_id(&mut self, start_pos: u32) -> Token {
         while let Some(c) = self.next() {
-            match c {
-                b'<' => {
-                    self.pos -= 1;
-                    break;
-                },
-                // Skip on all characters for now
-                _ => ()
-           } 
-        }
-
-        Token {
-            kind: TokenKind::RefValue,
-            range: Range {
-                start: start_pos,
-                end: self.pos as u32
+            if c == b'<' {
+                self.pos -= 1;
+                break;
             }
         }
+        self.make_token(TokenKind::RefValue, start_pos)
     }
 
     /// TODO: Make this parse urls, paths, or values directly
     fn make_ref_value(&mut self, start_pos: u32) -> Token {
         while let Some(c) = self.next() {
-            match c {
-                b'`' => {
-                    self.pos -= 1;
-                    break;
-                },
-                // Skip on all characters for now
-                _ => ()
-           } 
-        }
-
-        Token {
-            kind: TokenKind::RefValue,
-            range: Range {
-                start: start_pos,
-                end: self.pos as u32
+            if c == b'`' {
+                self.pos -= 1;
+                break;
             }
         }
+        self.make_token(TokenKind::RefValue, start_pos)
     }
 
     fn make_body(&mut self, start_pos: u32) -> Token {
@@ -256,8 +187,7 @@ impl <'a> Lexer<'a> {
 
                     if p1 == Some(b'`') && p2 == Some(b'`') {
                         self.pos += 2;
-                    }
-                    else {
+                    } else {
                         self.pos -= 1;
                         break;
                     }
@@ -267,16 +197,9 @@ impl <'a> Lexer<'a> {
                     break;
                 },
                 _ => ()
-           } 
-        }
-
-        Token {
-            kind: TokenKind::BodyText,
-            range: Range {
-                start: start_pos,
-                end: self.pos as u32
             }
         }
+        self.make_token(TokenKind::BodyText, start_pos)
     }
 }
 
@@ -382,7 +305,7 @@ mod tests {
        let mut l = Lexer::new(s);
        let tokens = l.tokenize();
        assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefSKill);
+       assert_eq!(tokens[1].kind, TokenKind::RefSkill);
        assert_eq!(slice(s, &tokens[1]), "skill");
        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
        assert_eq!(tokens[3].kind, TokenKind::RefValue);
