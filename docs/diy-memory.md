@@ -13,7 +13,7 @@ already worked through.
 
 ---
 
-## Current stage: Stage 1 complete — ready for Stage 2
+## Current stage: Stage 2 complete — ready for Stage 3
 
 ---
 
@@ -98,15 +98,99 @@ impl PanSource {
 
 ---
 
-## Stage 2 — 🔜 Not started
+## Stage 2 — ✅ Complete
 
-Next up: tokens and the lexer. Key design questions to prime:
+**File:** `crates/skillet-compiler/src/lex.rs`
 
-- What *are* the tokens of `.pan`? What counts as a token vs opaque body text?
-- How are the special constructs (`{{> name }}`, `var::FOO`, `ref::path`,
-  `cmd::name`, `skill::name`) tokenised — whole tokens or multi-token sequences?
-- Streaming iterator vs `Vec<Token>`?
-- Error tokens vs aborting the stream?
+### What was built
 
-The professor should open Stage 2 by asking the user to define what a `.pan`
-token even is before any code is written.
+`Lexer<'a>` — a hand-written, zero-allocation lexer that turns a `&str` into
+a `Vec<Token>`. Each `Token` is a `(TokenKind, Range<u32>)` — no heap
+allocation per token. The lexer handles all `.pan` structural constructs and
+produces correct ranges for every token kind.
+
+### Key design decisions made
+
+| Decision | Choice | Reasoning |
+|---|---|---|
+| Token shape | `TokenKind` enum + `Range<u32>` | Zero allocation; slices back into source via range when text is needed. |
+| Fragment delimiters | `{>` open, `<}` close | Simplified from the original `{{> }}` syntax; easier to lex unambiguously. |
+| Ref syntax | Backtick-prefixed only: `` `ref::foo` `` | Naked `ref::foo` in prose is BodyText; only backtick-wrapped refs are structural. |
+| Tick-context detection | Check `src[start_pos - 1] == b'\`'` in `tick_prefixed_ref_token` | No state needed; the previous byte tells us if we're inside a backtick context. |
+| Double-tick escape | `` ``...`` `` suppresses structural token detection | TickDouble pushed silently, then `make_body` called directly — escaped content never reaches the keyword-detection arm. |
+| Code fence | Triple backtick absorbed as single `BodyText` | Delimiters included in range; `make_body` detects and skips internal triple-backtick sequences. |
+| Multi-token constructs | `::` and `FragmentOpen`/`FragmentClose` pushed directly inside match arms | Allows one return value per loop iteration while still emitting multiple tokens for `::`-prefixed refs and fragments. |
+| Terminator handling | `pos -= 1` after consuming terminator in helpers | Leaves the terminating byte for the outer loop; no data loss. |
+| `Vec<Token>` over streaming iterator | Materialise everything | Parser needs arbitrary lookahead; `Vec` is cheap at skillet's scale and dramatically simplifies the parser. |
+
+### Key concepts the user worked through
+
+- **`start_pos` capture after `next()`** — `next()` advances `pos` before
+  returning, so `start_pos = (self.pos - 1) as u32` is required. An off-by-one
+  here would shift every token range by one byte.
+
+- **`peek` vs `next` for terminators** — helpers initially consumed the
+  terminating byte via `next()`, causing it to disappear from the stream. Fixed
+  with `self.pos -= 1` before `break` to "unconsume" the terminator.
+
+- **`slice.get(index).copied()`** — the idiomatic zero-panic bounds-checked
+  byte access pattern; replaces manual `if pos < len` guards.
+
+- **`starts_with` for keyword detection** — checking `src[start_pos..].starts_with(b"ref::")` is simpler and clearer than a character-by-character scan loop.
+
+- **`len - 3` advancement for keywords** — constants include `::` (e.g.
+  `b"ref::"` len=5), but only the keyword bytes should be consumed; `::` must
+  be left for the main loop's `b':'` arm. Advancing by `len - 3` (not `len - 2`)
+  leaves both colons intact.
+
+- **Two-token emission in one iteration** — `DoubleColon` and `FragmentOpen`
+  are pushed directly to `tokens` inside the match arm, then the arm returns a
+  second token (`RefValue` / fragment id) as its expression value. The `println`
+  at the bottom of the loop only captures the return-value token, which confused
+  debugging until the full `tokens` vec was inspected.
+
+### Final token inventory
+
+```
+BodyText      — prose, code fences (with delimiters), and anything not structural
+Tick          — single backtick (inline code marker / ref context opener)
+TickDouble    — double backtick (escape sequence delimiter)
+DoubleColon   — `::` separator between ref type and ref value
+FragmentOpen  — `{>` fragment insertion opener
+FragmentClose — `<}` fragment insertion closer
+RefValue      — the value after `::` or the name inside a fragment
+RefReference  — `ref` keyword
+RefSKill      — `skill` keyword
+RefAgent      — `agent` keyword
+RefCmd        — `cmd` keyword
+Invalid       — reserved for future error token use
+```
+
+### What was easier than expected
+
+- The `make_body` / `make_ref_value` / `make_fragment_id` helper pattern clicked
+  quickly once the "unconsume terminator" rule was established.
+- `starts_with` on byte slices made keyword detection trivial.
+
+### What was harder than expected
+
+- The two-token-per-iteration pattern (DoubleColon + RefValue, FragmentOpen +
+  RefValue) required breaking the clean "one token per loop iteration" rule.
+  Took a few iterations to settle on pushing directly to `tokens` inside the arm.
+- Debugging was hampered by `println!` only showing return-value tokens, not
+  tokens pushed inside arms. Lesson: print the full vec after tokenizing, not
+  inline during the loop.
+
+---
+
+## Stage 3 — 🔜 Not started
+
+Next up: AST and parser. Key design questions to prime:
+
+- What does the `Block` enum look like? What variants are needed?
+- Where do source ranges live — on every node, or a side-table?
+- How does the parser handle errors — abort on first, or collect multiple?
+- What AST node represents a fragment insertion vs a ref?
+
+The professor should open Stage 3 by asking the user to sketch the `Block` enum
+before any parser code is written.
