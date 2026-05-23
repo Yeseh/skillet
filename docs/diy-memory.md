@@ -183,14 +183,108 @@ Invalid       — reserved for future error token use
 
 ---
 
-## Stage 3 — 🔜 Not started
+## Stage 3 — ✅ Complete
 
-Next up: AST and parser. Key design questions to prime:
+**File:** `crates/skillet-compiler/src/parse.rs`
 
-- What does the `Block` enum look like? What variants are needed?
-- Where do source ranges live — on every node, or a side-table?
-- How does the parser handle errors — abort on first, or collect multiple?
-- What AST node represents a fragment insertion vs a ref?
+### What was built
 
-The professor should open Stage 3 by asking the user to sketch the `Block` enum
-before any parser code is written.
+`PanParse<'a>` — borrows from a `PanSource` and produces a flat `Vec<Node>` plus
+a `Vec<ParseError>`. The parser walks the `Vec<Token>` from the lexer using a
+`Peekable` iterator, consuming tokens in sequence and building typed nodes.
+
+### Key design decisions made
+
+| Decision | Choice | Reasoning |
+|---|---|---|
+| AST shape | Flat `Vec<Node>`, not a tree | `.pan` has no nesting; a flat list is sufficient and simpler |
+| Ranges | On every node (`source_range: Range<u32>`) | Side-table approach would require reconstructing ranges from token spans at every diagnostic call site |
+| Error handling | Collect into `Vec<ParseError>`, always return `PanParse` | A linter that aborts on first error is half a linter |
+| Return type | `PanParse` struct (nodes + errors + path), no `Result` | Parsing always produces something useful; `Result` was a false frame |
+| Error message type | `ParseErrorKind` enum (not `String`) | Lets the compiler match on error kind; dynamic messages would be `String` not `Box<str>` |
+| Borrow approach | `PanParse<'a>` borrows `src: &'a str` from `PanSource` | Avoids cloning; lifetime is clear; moved `get_source_string` to an `impl` method to avoid closure borrow conflicts |
+| Recovery boundary | Advance to next `Tick` or `FragmentOpen` via `recover()` | These are the only valid entry points for structural nodes in the outer loop |
+| Ref parsing | `make_ref_node` helper takes `RefKind` parameter | All six ref kinds share identical token-consumption logic; only `RefKind` varies |
+
+### Node inventory
+
+```rust
+pub enum Node {
+    Ref      { kind: RefKind, value: String, source_range: Range<u32> },
+    Fragment { value: String, source_range: Range<u32> },
+    RefSuspect  { source_range: Range<u32> },   // `backtick body` — lint candidate
+    EscapedBody { source_range: Range<u32> },   // ``double backtick body``
+    Body        { source_range: Range<u32> },   // plain prose
+}
+```
+
+### Key concepts the user worked through
+
+- **AST carries semantics, not tokens** — early sketches listed token sequences
+  (tick + keyword + doublecolon + value + tick); the insight was that the compiler
+  only needs `RefKind` + value, not the surrounding syntax.
+
+- **Side-table vs on-node ranges** — rejected side-table because every diagnostic
+  call site would need to reconstruct the range from constituent tokens.
+
+- **`Result` vs always-succeed struct** — `Result<Vec<Node>, Vec<ParseError>>`
+  was the first instinct; corrected to `PanParse` because partial results and
+  errors coexist during error recovery.
+
+- **Closure borrow conflict** — initial `get_source_string` closure captured
+  `self.src` immutably, conflicting with `self.nodes.push()` mutable borrows.
+  Fixed by moving it to an `impl` method.
+
+- **`pub` on enum variant fields** — Rust doesn't allow `pub` on struct-variant
+  fields; visibility is controlled by the enum's own `pub`.
+
+- **Peek-before-commit** — the `make_ref_node` helper originally consumed the
+  ref keyword token before checking for `DoubleColon`. Fixed to peek first; if
+  no `DoubleColon` follows, nothing is consumed and the outer loop handles the
+  tokens naturally.
+
+- **Fallthrough after error + recover** — multiple arms pushed an error and called
+  `recover()` but then fell through to `unwrap()` on the next token. Required
+  explicit `return` / `continue` after each recovery path.
+
+- **Double-emit bug** — `Tick => BodyText` arm peeked `p` but didn't consume it,
+  causing the `BodyText` to be emitted twice (once in merged range, once on next
+  iteration). Fixed by calling `next()` after the peek.
+
+- **`SuspectedRef` / `RefSuspect` variant** — backtick-wrapped plain text
+  (`` `some-thing` ``) is structurally a candidate for a typed ref. Emitted as
+  its own node so the compiler can issue a lint suggestion.
+
+- **Syntax mismatch with existing `.pan` files** — example files use `{{> name }}`
+  (old syntax); lexer uses `{>` / `<}` (new syntax). Examples are integration
+  tests with the full toolchain and must not change until the whole pipeline
+  is swapped over. New-syntax unit tests are the correct test surface for the
+  parser.
+
+### What was easier than expected
+
+- The `make_ref_node` extraction was clean once the peek-before-commit fix was in.
+- `recover()` was five lines once the safe-boundary invariant was clear.
+
+### What was harder than expected
+
+- The fallthrough-after-error pattern bit multiple times across `TickDouble`,
+  `FragmentOpen`, and `make_ref_node`. Each arm needed independent review.
+- The closure borrow conflict required a small structural rethink (impl method)
+  rather than a local fix.
+
+### Test coverage
+
+29 parser tests, all green. Covers all node kinds, all error kinds, source range
+correctness for delimiters, and multi-construct documents.
+
+---
+
+## Stage 4 — 🔜 Not started
+
+Next up: compiler / visitor. Key design questions to prime:
+
+- Plain `match` or `Visitor` trait?
+- Where does fragment expansion happen — inline during walk, or a separate pass?
+- How does the `CompileContext` get built, and when?
+- Token counting: as-you-emit or end-pass?

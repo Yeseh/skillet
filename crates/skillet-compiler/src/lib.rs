@@ -1,4 +1,5 @@
 mod lex;
+mod parse;
 
 pub struct SourceLocation {
     /// Line number (1 based)

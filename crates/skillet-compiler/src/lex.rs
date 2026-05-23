@@ -21,6 +21,8 @@ pub enum TokenKind {
     RefSkill,
     RefAgent,
     RefCmd,
+    RefPath,
+    RefUrl
 }
 
 #[derive(Debug, PartialEq)]
@@ -35,6 +37,8 @@ const AGENT_REF: &[u8] = b"agent::";
 const SKILL_REF: &[u8] = b"skill::";
 const CMD_REF: &[u8] = b"cmd::";
 const REFERENCE_REF: &[u8] = b"ref::";
+const PATH_REF: &[u8] = b"path::";
+const URL_REF: &[u8] = b"url::";
 
 impl<'a> Lexer<'a> {
     // Returns (kind, keyword_len) where keyword_len excludes the trailing "::"
@@ -48,6 +52,10 @@ impl<'a> Lexer<'a> {
             Some((TokenKind::RefCmd, CMD_REF.len() - 2))
         } else if slice.starts_with(SKILL_REF) {
             Some((TokenKind::RefSkill, SKILL_REF.len() - 2))
+        } else if slice.starts_with(PATH_REF) {
+            Some((TokenKind::RefPath, PATH_REF.len() - 2))
+        } else if slice.starts_with(URL_REF) {
+            Some((TokenKind::RefUrl, URL_REF.len() - 2))
         } else {
             None
         }
@@ -97,7 +105,7 @@ impl<'a> Lexer<'a> {
             let start_pos = (self.pos - 1) as u32;
 
             let token: Option<Token> = match c {
-                b'a' | b's' | b'r' | b'c' => {
+                b'a' | b'c' | b'p' | b'r' | b's' | b'u' => {
                     Some(self.tick_prefixed_ref_token(start_pos)
                         .unwrap_or_else(|| self.make_body(start_pos)))
                 },
@@ -363,6 +371,34 @@ mod tests {
        let tokens = l.tokenize();
        assert_eq!(tokens.len(), 1);
        assert_eq!(tokens[0].kind, TokenKind::BodyText);
+   }
+
+   #[test]
+   fn test_path_ref() {
+       let s = "`path::some/file.md`";
+       let mut l = Lexer::new(s);
+       let tokens = l.tokenize();
+       assert_eq!(tokens[0].kind, TokenKind::Tick);
+       assert_eq!(tokens[1].kind, TokenKind::RefPath);
+       assert_eq!(slice(s, &tokens[1]), "path");
+       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+       assert_eq!(tokens[3].kind, TokenKind::RefValue);
+       assert_eq!(slice(s, &tokens[3]), "some/file.md");
+       assert_eq!(tokens[4].kind, TokenKind::Tick);
+   }
+
+   #[test]
+   fn test_url_ref() {
+       let s = "`url::https://example.com`";
+       let mut l = Lexer::new(s);
+       let tokens = l.tokenize();
+       assert_eq!(tokens[0].kind, TokenKind::Tick);
+       assert_eq!(tokens[1].kind, TokenKind::RefUrl);
+       assert_eq!(slice(s, &tokens[1]), "url");
+       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+       assert_eq!(tokens[3].kind, TokenKind::RefValue);
+       assert_eq!(slice(s, &tokens[3]), "https://example.com");
+       assert_eq!(tokens[4].kind, TokenKind::Tick);
    }
 
    #[test]
