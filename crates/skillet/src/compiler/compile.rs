@@ -146,7 +146,10 @@ pub fn compile_body(input: &BodyCompileInput<'_>) -> BodyCompileOutput {
                 out.push_str(span(input.body, source_range));
             }
 
-            Node::Fragment { value, source_range } => {
+            Node::Fragment {
+                value,
+                source_range,
+            } => {
                 let id = value.trim();
                 let (line, col) = offset_to_line_col(input.body, source_range.start as usize);
                 if let Some(reason) = input.fragments.poisoned.get(id) {
@@ -313,8 +316,7 @@ fn emit_ref(
 
         RefKind::Env => match input.env.get(value) {
             Some(e) => {
-                let resolved =
-                    std::env::var(value).unwrap_or_else(|_| e.default.clone());
+                let resolved = std::env::var(value).unwrap_or_else(|_| e.default.clone());
                 out.push_str(&resolved);
             }
             None => diagnostics.push(CompileDiag {
@@ -383,7 +385,14 @@ mod tests {
     fn plain_body_passes_through_unchanged() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("hello world", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "hello world",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "hello world");
     }
@@ -394,7 +403,14 @@ mod tests {
     fn token_count_is_nonzero_for_nonempty_body() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("hello world", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "hello world",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.tokens > 0, "expected at least one token");
     }
 
@@ -402,7 +418,14 @@ mod tests {
     fn empty_body_produces_zero_tokens() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert_eq!(out.tokens, 0);
     }
 
@@ -415,7 +438,14 @@ mod tests {
         let frags = render_fragments(&raw);
         raw.insert("footer".to_string(), "## Footer\nsome text\n".to_string());
         let frags = render_fragments(&raw);
-        let out = compile_body(&default_input("{> footer <}", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "{> footer <}",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
         assert!(out.text.contains("## Footer"));
         assert!(out.text.contains("some text"));
@@ -429,7 +459,14 @@ mod tests {
         let frags = render_fragments(&raw);
         raw.insert("note".to_string(), "content\n\n".to_string());
         let frags = render_fragments(&raw);
-        let out = compile_body(&default_input("{> note <}", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "{> note <}",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "content");
     }
@@ -438,10 +475,18 @@ mod tests {
     fn unknown_fragment_produces_error_diagnostic() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("{> missing <}", &frags, &cfg, no_set(), no_set(), no_set()));
-        assert!(out.diagnostics.iter().any(|d| {
-            d.severity == DiagSeverity::Error && d.message.contains("missing")
-        }));
+        let out = compile_body(&default_input(
+            "{> missing <}",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| { d.severity == DiagSeverity::Error && d.message.contains("missing") }));
     }
 
     #[test]
@@ -452,8 +497,18 @@ mod tests {
         raw.insert("note".to_string(), "content\n".to_string());
         let frags = render_fragments(&raw);
         let body = "{> note <}\n{> note <}";
-        let out = compile_body(&default_input(body, &frags, &cfg, no_set(), no_set(), no_set()));
-        assert_eq!(out.fragments_used.iter().filter(|f| *f == "note").count(), 1);
+        let out = compile_body(&default_input(
+            body,
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
+        assert_eq!(
+            out.fragments_used.iter().filter(|f| *f == "note").count(),
+            1
+        );
     }
 
     #[test]
@@ -464,7 +519,14 @@ mod tests {
         raw.insert("outer".to_string(), "text {> inner <} more\n".to_string());
         raw.insert("inner".to_string(), "inner content\n".to_string());
         let frags = render_fragments(&raw);
-        let out = compile_body(&default_input("{> outer <}", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "{> outer <}",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         // Error must appear at the callsite line, not line 0, and must name
         // both the fragment being expanded and why it failed.
         let diag = out
@@ -472,8 +534,16 @@ mod tests {
             .iter()
             .find(|d| d.severity == DiagSeverity::Error)
             .expect("expected an error diagnostic");
-        assert!(diag.message.contains("outer"), "message should name the fragment: {}", diag.message);
-        assert!(diag.message.contains("inner"), "message should name the nested include: {}", diag.message);
+        assert!(
+            diag.message.contains("outer"),
+            "message should name the fragment: {}",
+            diag.message
+        );
+        assert!(
+            diag.message.contains("inner"),
+            "message should name the nested include: {}",
+            diag.message
+        );
         assert_eq!(diag.line, 1, "error should be at callsite line 1");
     }
 
@@ -483,7 +553,14 @@ mod tests {
     fn ref_directive_emits_backtick_wrapped_value() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`ref::foo.md`", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "`ref::foo.md`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "`foo.md`");
     }
@@ -492,7 +569,14 @@ mod tests {
     fn cmd_directive_emits_backtick_wrapped_value() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`cmd::git status`", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "`cmd::git status`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "`git status`");
     }
@@ -501,7 +585,14 @@ mod tests {
     fn skill_directive_emits_backtick_wrapped_value() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`skill::other-skill`", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "`skill::other-skill`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "`other-skill`");
     }
@@ -526,17 +617,32 @@ mod tests {
     fn unknown_var_produces_error_diagnostic() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`var::unknown`", &frags, &cfg, no_set(), no_set(), no_set()));
-        assert!(out.diagnostics.iter().any(|d| {
-            d.severity == DiagSeverity::Error && d.message.contains("unknown")
-        }));
+        let out = compile_body(&default_input(
+            "`var::unknown`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| { d.severity == DiagSeverity::Error && d.message.contains("unknown") }));
     }
 
     #[test]
     fn env_directive_substitutes_value_without_backticks() {
         let cfg = SkilletConfig::default(); // env has CI = "false"
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("ci: `env::CI`", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "ci: `env::CI`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         let expected = std::env::var("CI").unwrap_or_else(|_| "false".to_string());
         assert_eq!(out.text, format!("ci: {}", expected));
@@ -546,17 +652,32 @@ mod tests {
     fn unknown_env_produces_error_diagnostic() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`env::UNKNOWN`", &frags, &cfg, no_set(), no_set(), no_set()));
-        assert!(out.diagnostics.iter().any(|d| {
-            d.severity == DiagSeverity::Error && d.message.contains("UNKNOWN")
-        }));
+        let out = compile_body(&default_input(
+            "`env::UNKNOWN`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| { d.severity == DiagSeverity::Error && d.message.contains("UNKNOWN") }));
     }
 
     #[test]
     fn agent_directive_emits_backtick_wrapped_value() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`agent::my-agent`", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "`agent::my-agent`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "`my-agent`");
     }
@@ -565,7 +686,14 @@ mod tests {
     fn url_directive_emits_backtick_wrapped_value() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("`url::https://example.com`", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "`url::https://example.com`",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "`https://example.com`");
     }
@@ -580,10 +708,20 @@ mod tests {
         known_files.insert("real.md".to_string());
         let input = BodyCompileInput {
             known_files: &known_files,
-            ..default_input("`ref::missing.md`", &frags, &cfg, no_set(), no_set(), no_set())
+            ..default_input(
+                "`ref::missing.md`",
+                &frags,
+                &cfg,
+                no_set(),
+                no_set(),
+                no_set(),
+            )
         };
         let out = compile_body(&input);
-        assert!(out.diagnostics.iter().any(|d| d.severity == DiagSeverity::Error));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == DiagSeverity::Error));
     }
 
     #[test]
@@ -597,7 +735,10 @@ mod tests {
             ..default_input("`skill::ghost`", &frags, &cfg, no_set(), no_set(), no_set())
         };
         let out = compile_body(&input);
-        assert!(out.diagnostics.iter().any(|d| d.severity == DiagSeverity::Error));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == DiagSeverity::Error));
     }
 
     #[test]
@@ -611,7 +752,10 @@ mod tests {
             ..default_input("`cmd::ghost`", &frags, &cfg, no_set(), no_set(), no_set())
         };
         let out = compile_body(&input);
-        assert!(out.diagnostics.iter().any(|d| d.severity == DiagSeverity::Warning));
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == DiagSeverity::Warning));
     }
 
     // ── escaped body ──────────────────────────────────────────────────────────
@@ -620,7 +764,14 @@ mod tests {
     fn escaped_body_collapses_double_backtick_to_single() {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
-        let out = compile_body(&default_input("``skill::verbatim``", &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            "``skill::verbatim``",
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         assert!(out.diagnostics.is_empty());
         assert_eq!(out.text, "`skill::verbatim`");
     }
@@ -632,7 +783,14 @@ mod tests {
         let cfg = SkilletConfig::default();
         let frags = render_fragments(&HashMap::new());
         let body = "line one\n{> ghost <}";
-        let out = compile_body(&default_input(body, &frags, &cfg, no_set(), no_set(), no_set()));
+        let out = compile_body(&default_input(
+            body,
+            &frags,
+            &cfg,
+            no_set(),
+            no_set(),
+            no_set(),
+        ));
         let diag = out
             .diagnostics
             .iter()

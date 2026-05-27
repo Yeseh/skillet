@@ -162,7 +162,24 @@ fn compile_one_skill(
                 .map(|t| crate::tokens::count_tokens(&t, &cfg.build.tokenizer))
         })
         .sum();
-    let transitive_tokens = result.activation_tokens + ref_tokens;
+    let references_dir = source.skill_dir.join("references");
+    let references_tokens: u32 = if references_dir.is_dir() {
+        walkdir::WalkDir::new(&references_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("pan")
+            })
+            .filter_map(|e| {
+                std::fs::read_to_string(e.path())
+                    .ok()
+                    .map(|t| crate::tokens::count_tokens(&t, &cfg.build.tokenizer))
+            })
+            .sum()
+    } else {
+        0
+    };
+    let transitive_tokens = result.activation_tokens + ref_tokens + references_tokens;
 
     lockfile.skills.insert(
         source.name.clone(),

@@ -8,7 +8,10 @@ use skillet::parse::parse_frontmatter;
 use skillet::refs::extract_path_refs;
 use skillet::tokens::count_tokens;
 use skillet::workspace::{self, SkillSource};
+use std::collections::HashMap;
 use std::path::Path;
+
+use crate::workspace::{self as cli_workspace, Skill};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -63,8 +66,11 @@ pub fn run(
     let skills_src_dir = workspace_path.join(&config.workspace.skills_src_dir);
     let skills_out_dir = workspace_path.join(&config.workspace.skills_out_dir);
     let fragments_dir = workspace_path.join(&config.workspace.fragments_dir);
+    let agents_dir = workspace_path.join("agents");
 
     let all_sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
+    let ws = cli_workspace::resolve(workspace_path, &skills_src_dir, &agents_dir)?;
+    let skill_map: HashMap<&str, &Skill> = ws.skills.iter().map(|s| (s.name.as_str(), s)).collect();
     let lf = lockfile::read(workspace_path)?;
 
     let targets: Vec<_> = match skill_name {
@@ -74,7 +80,8 @@ pub fn run(
 
     let mut rows: Vec<BudgetRow> = Vec::with_capacity(targets.len());
     for source in &targets {
-        let row = compute_row(source, &fragments_dir, &lf, &config.build.tokenizer)?;
+        let skill = skill_map.get(source.name.as_str()).copied();
+        let row = compute_row(source, skill, &fragments_dir, &lf, &config.build.tokenizer)?;
         rows.push(row);
     }
 
@@ -90,6 +97,7 @@ pub fn run(
 
 fn compute_row(
     source: &SkillSource,
+    skill: Option<&Skill>,
     fragments_dir: &Path,
     lockfile: &lockfile::Lockfile,
     tokenizer: &str,
@@ -97,12 +105,14 @@ fn compute_row(
     if let Some(entry) = lockfile.skills.get(&source.name) {
         if entry.activation_tokens > 0 {
             let mut fragments = Vec::with_capacity(entry.fragments_used.len());
+            let mut frag_tokens_total: u32 = 0;
             for frag_name in &entry.fragments_used {
                 let tokens = lockfile
                     .fragments
                     .get(frag_name)
                     .map(|f| f.tokens)
                     .unwrap_or(0);
+                frag_tokens_total += tokens;
                 fragments.push(FragmentEntry {
                     name: frag_name.clone(),
                     tokens,
@@ -111,18 +121,19 @@ fn compute_row(
             return Ok(BudgetRow {
                 skill: source.name.clone(),
                 discovery: entry.discovery_tokens,
-                activation: entry.activation_tokens,
+                activation: entry.activation_tokens.saturating_sub(frag_tokens_total),
                 transitive: entry.transitive_tokens,
                 fragments,
             });
         }
     }
 
-    compute_row_from_disk(source, fragments_dir, lockfile, tokenizer)
+    compute_row_from_disk(source, skill, fragments_dir, lockfile, tokenizer)
 }
 
 fn compute_row_from_disk(
     source: &SkillSource,
+    skill: Option<&Skill>,
     fragments_dir: &Path,
     lockfile: &lockfile::Lockfile,
     tokenizer: &str,
@@ -144,7 +155,7 @@ fn compute_row_from_disk(
         _ => String::new(),
     };
     let discovery = count_tokens(&discovery_text, tokenizer);
-    let activation = count_tokens(&compiled, tokenizer);
+    let compiled_tokens = count_tokens(&compiled, tokenizer);
 
     let source_text = std::fs::read_to_string(&source.source_path)
         .with_context(|| format!("failed to read source '{}'", source.source_path.display()))?;
@@ -157,7 +168,8 @@ fn compute_row_from_disk(
                 .map(|t| count_tokens(&t, tokenizer))
         })
         .sum();
-    let transitive = activation + ref_tokens;
+    let references_tokens = count_references_tokens(skill, tokenizer);
+    let transitive = compiled_tokens + ref_tokens + references_tokens;
 
     let frag_names = lockfile
         .skills
@@ -166,6 +178,7 @@ fn compute_row_from_disk(
         .unwrap_or(&[]);
 
     let mut fragments = Vec::with_capacity(frag_names.len());
+    let mut frag_tokens_total: u32 = 0;
     for frag_name in frag_names {
         let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
         let tokens = if let Ok(text) = std::fs::read_to_string(&frag_path) {
@@ -173,11 +186,14 @@ fn compute_row_from_disk(
         } else {
             0
         };
+        frag_tokens_total += tokens;
         fragments.push(FragmentEntry {
             name: frag_name.clone(),
             tokens,
         });
     }
+
+    let activation = compiled_tokens.saturating_sub(frag_tokens_total);
 
     Ok(BudgetRow {
         skill: source.name.clone(),
@@ -186,6 +202,23 @@ fn compute_row_from_disk(
         transitive,
         fragments,
     })
+}
+
+/// Sums token counts for all reference files belonging to a skill.
+fn count_references_tokens(skill: Option<&Skill>, tokenizer: &str) -> u32 {
+    let skill = match skill {
+        Some(s) => s,
+        None => return 0,
+    };
+    skill
+        .references
+        .iter()
+        .filter_map(|r| {
+            std::fs::read_to_string(&r.absolute_path)
+                .ok()
+                .map(|t| count_tokens(&t, tokenizer))
+        })
+        .sum()
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────

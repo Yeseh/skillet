@@ -18,6 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use walkdir::WalkDir;
 
+use crate::workspace::{self as cli_workspace, Skill};
+
 /// Structured report produced by a build run.
 #[derive(Debug, Serialize)]
 pub struct BuildReport {
@@ -41,6 +43,9 @@ pub fn run(
     let fragments_dir = workspace.join(&cfg.workspace.fragments_dir);
 
     let sources = skillet::workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
+    let agents_dir = workspace.join("agents");
+    let ws = cli_workspace::resolve(workspace, &skills_src_dir, &agents_dir)?;
+    let skill_map: HashMap<&str, &Skill> = ws.skills.iter().map(|s| (s.name.as_str(), s)).collect();
 
     let targets: Vec<&SkillSource> = match skill_name {
         Some(name) => {
@@ -81,7 +86,8 @@ pub fn run(
     let mut warnings: Vec<String> = Vec::new();
 
     for source in &targets {
-        compile_one_skill(source, cfg, &fragments, &known_skills, &mut lockfile)?;
+        let skill = skill_map.get(source.name.as_str()).copied();
+        compile_one_skill(source, skill, cfg, &fragments, &known_skills, &mut lockfile)?;
         if opts.format != OutputFormat::Json {
             println!("built {}", source.name);
         }
@@ -144,6 +150,7 @@ fn load_all_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
 
 fn compile_one_skill(
     source: &SkillSource,
+    skill: Option<&Skill>,
     cfg: &SkilletConfig,
     fragments: &HashMap<String, String>,
     known_skills: &HashSet<String>,
@@ -218,7 +225,19 @@ fn compile_one_skill(
                 .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
         })
         .sum();
-    let transitive_tokens = result.activation_tokens + ref_tokens;
+    let references_tokens: u32 = skill
+        .map(|s| {
+            s.references
+                .iter()
+                .filter_map(|r| {
+                    std::fs::read_to_string(&r.absolute_path)
+                        .ok()
+                        .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
+                })
+                .sum()
+        })
+        .unwrap_or(0);
+    let transitive_tokens = result.activation_tokens + ref_tokens + references_tokens;
 
     lockfile.skills.insert(
         source.name.clone(),

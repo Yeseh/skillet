@@ -126,7 +126,9 @@ impl<'a> PanParse<'a> {
         start_offset: u32,
         kind: RefKind,
     ) {
-        let rf = token_iter.next().expect("ref token was peeked before parsing");
+        let rf = token_iter
+            .next()
+            .expect("ref token was peeked before parsing");
 
         let peek_double_colon = token_iter.peek();
         if peek_double_colon.is_none_or(|t| t.kind != TokenKind::DoubleColon) {
@@ -223,9 +225,7 @@ impl<'a> PanParse<'a> {
                                 self.make_ref_node(&mut token_iter, t.range.start, RefKind::Env)
                             }
                             TokenKind::BodyText => {
-                                let body = token_iter
-                                    .next()
-                                    .expect("body token exists after peek");
+                                let body = token_iter.next().expect("body token exists after peek");
 
                                 let peek_tick = token_iter.peek();
                                 if peek_tick.is_none_or(|t| t.kind != TokenKind::Tick) {
@@ -236,9 +236,8 @@ impl<'a> PanParse<'a> {
                                     continue;
                                 }
 
-                                let closing_tick = token_iter
-                                    .next()
-                                    .expect("closing tick exists after peek");
+                                let closing_tick =
+                                    token_iter.next().expect("closing tick exists after peek");
                                 self.nodes.push(Node::RefSuspect {
                                     source_range: Range {
                                         start: t.range.start,
@@ -364,7 +363,10 @@ mod tests {
         let result = parse_str("hello world");
         assert!(result.errors.is_empty(), "expected no errors");
         assert_eq!(result.nodes.len(), 1);
-        assert!(matches!(&result.nodes[0], Node::Body { .. }), "expected Body");
+        assert!(
+            matches!(&result.nodes[0], Node::Body { .. }),
+            "expected Body"
+        );
     }
 
     #[test]
@@ -651,10 +653,13 @@ mod tests {
     fn mixed_document_produces_expected_node_kinds() {
         let result = parse_str("Use `skill::my-skill` here. {>footer<}");
         assert!(result.errors.is_empty(), "expected no errors");
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| matches!(n, Node::Ref { kind: RefKind::Skill, .. })));
+        assert!(result.nodes.iter().any(|n| matches!(
+            n,
+            Node::Ref {
+                kind: RefKind::Skill,
+                ..
+            }
+        )));
         assert!(result
             .nodes
             .iter()
@@ -666,13 +671,19 @@ mod tests {
     fn multiple_refs_of_different_kinds() {
         let result = parse_str("`skill::a` `agent::b`");
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| matches!(n, Node::Ref { kind: RefKind::Skill, .. })));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| matches!(n, Node::Ref { kind: RefKind::Agent, .. })));
+        assert!(result.nodes.iter().any(|n| matches!(
+            n,
+            Node::Ref {
+                kind: RefKind::Skill,
+                ..
+            }
+        )));
+        assert!(result.nodes.iter().any(|n| matches!(
+            n,
+            Node::Ref {
+                kind: RefKind::Agent,
+                ..
+            }
+        )));
     }
 }
