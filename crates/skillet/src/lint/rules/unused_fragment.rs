@@ -2,9 +2,9 @@
 
 use crate::config::SkilletConfig;
 use crate::lint::pipeline::SourceFile;
+use crate::lint::LintContext;
 use regex::Regex;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::LazyLock;
 
 use super::{diag, Diagnostic, Severity};
@@ -15,10 +15,10 @@ static FRAGMENT_INCLUDE_RE: LazyLock<Regex> =
 /// Finds unused fragments using the pre-read `raw` content from Phase 1.
 pub fn check(
     source_files: &[SourceFile],
-    fragments_dir: &Path,
+    ctx: &LintContext,
     _config: &SkilletConfig,
 ) -> Vec<Diagnostic> {
-    if !fragments_dir.exists() {
+    if ctx.fragment_names.is_empty() {
         return vec![];
     }
 
@@ -29,24 +29,16 @@ pub fn check(
         }
     }
 
-    let Ok(entries) = std::fs::read_dir(fragments_dir) else {
-        return vec![];
-    };
-
-    entries
-        .flatten()
-        .filter_map(|e| {
-            let fname = e.file_name().into_string().ok()?;
-            let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
-            if used.contains(&frag_name) {
-                return None;
-            }
-            Some(diag(
+    ctx.fragment_names
+        .iter()
+        .filter(|frag_name| !used.contains(frag_name.as_str()))
+        .map(|frag_name| {
+            diag(
                 Severity::Warning,
                 "<workspace>",
                 "unused-fragment",
                 format!("fragment '{frag_name}' is not included by any skill"),
-            ))
+            )
         })
         .collect()
 }

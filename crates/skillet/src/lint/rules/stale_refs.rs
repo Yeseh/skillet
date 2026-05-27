@@ -2,26 +2,22 @@
 
 use crate::config::SkilletConfig;
 use crate::lint::pipeline::SourceFile;
-use crate::workspace::{self, SkillSource};
-use std::path::Path;
+use crate::lint::LintContext;
 
 use super::{diag_located, Diagnostic, Severity};
 
 /// Validates all typed refs in the pre-extracted `parsed_refs` from Phase 2.
-pub fn check(
-    source: &SourceFile,
-    config: &SkilletConfig,
-    all_sources: &[SkillSource],
-    skills_src_dir: &Path,
-) -> Vec<Diagnostic> {
+pub fn check(source: &SourceFile, config: &SkilletConfig, ctx: &LintContext) -> Vec<Diagnostic> {
     use crate::refs::RefKind;
 
     let mut diags = Vec::new();
     let file_path = source.source_path.to_string_lossy().to_string();
+    let empty_set = std::collections::HashSet::new();
+    let skill_files = ctx.skill_files.get(&source.name).unwrap_or(&empty_set);
 
     for tr in &source.parsed_refs.typed {
         match tr.kind {
-            RefKind::Ref if !source.skill_dir.join(&tr.value).exists() => {
+            RefKind::Ref if !skill_files.contains(&tr.value) => {
                 diags.push(diag_located(
                     Severity::Error,
                     &source.name,
@@ -36,7 +32,7 @@ pub fn check(
             RefKind::Cmd => {
                 let cmd = tr.value.split_whitespace().next().unwrap_or(&tr.value);
                 let allowed = config.lint.allowed_commands.iter().any(|c| c == cmd);
-                if !allowed && !workspace::is_on_path(cmd) {
+                if !allowed && !ctx.known_commands.contains(cmd) {
                     diags.push(diag_located(
                         Severity::Warning,
                         &source.name,
@@ -48,10 +44,7 @@ pub fn check(
                     ));
                 }
             }
-            RefKind::Skill
-                if !all_sources.iter().any(|s| s.name == tr.value)
-                    && !skills_src_dir.join(&tr.value).is_dir() =>
-            {
+            RefKind::Skill if !ctx.known_skill_dirs.contains(&tr.value) => {
                 diags.push(diag_located(
                     Severity::Error,
                     &source.name,

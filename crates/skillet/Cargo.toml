@@ -15,8 +15,6 @@ sha2 = "0.11.0"
 hex = "0.4.3"
 chrono = { version = "0.4.44", features = ["serde"] }
 gray_matter = "0.3.2"
-owo-colors = "4.3.0"
-serde_json = "1.0.149"
 rustls = { version = "0.23", features = ["tls12"] }
 webpki-roots = "1.0.7"
 tiktoken-rs = "0.11"
@@ -25,6 +23,7 @@ rayon = "1"
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
+serde_json = "1.0.149"
 
 [[bench]]
 name = "lint"

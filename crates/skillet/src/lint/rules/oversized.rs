@@ -2,34 +2,37 @@
 
 use crate::config::SkilletConfig;
 use crate::lint::pipeline::SourceFile;
+use crate::lint::LintContext;
 use crate::lockfile::Lockfile;
 use crate::tokens::count_tokens;
-use std::path::Path;
 
 use super::{diag, Diagnostic, Severity};
 
 /// Checks whether the compiled `SKILL.md` activation cost exceeds the limit.
 ///
 /// Uses cached `activation_tokens` from the lockfile when available — no
-/// re-tokenization.  Falls back to reading `SKILL.md` directly when there is
-/// no lockfile entry (e.g. a stale-build scenario where the rule still runs).
+/// re-tokenization.  Falls back to tokenizing compiled text from `LintContext`
+/// when there is no lockfile entry.
 pub fn check_skill(
     source: &SourceFile,
     config: &SkilletConfig,
     lockfile: &Lockfile,
+    ctx: &LintContext,
 ) -> Vec<Diagnostic> {
     let tokens = if let Some(entry) = lockfile.skills.get(&source.name) {
         if entry.activation_tokens > 0 {
             entry.activation_tokens
         } else {
-            // Lockfile entry exists but tokens are zero (shouldn't happen for a
-            // real build, but fall back gracefully).
-            read_compiled_tokens(source, config)
+            ctx.activation_tokens
+                .get(&source.name)
+                .copied()
+                .unwrap_or(0)
         }
     } else {
-        // No lockfile entry — stale-build will fire separately; still check
-        // size by reading the compiled output.
-        read_compiled_tokens(source, config)
+        ctx.activation_tokens
+            .get(&source.name)
+            .copied()
+            .unwrap_or(0)
     };
 
     if tokens > config.lint.max_activation_tokens {
@@ -45,14 +48,6 @@ pub fn check_skill(
     } else {
         vec![]
     }
-}
-
-fn read_compiled_tokens(source: &SourceFile, config: &SkilletConfig) -> u32 {
-    let path = source.skill_out_dir.join("SKILL.md");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return 0;
-    };
-    count_tokens(&content, &config.build.tokenizer)
 }
 
 /// Checks whether the skill description exceeds the discovery token limit.
@@ -85,22 +80,10 @@ pub fn check_description(source: &SourceFile, config: &SkilletConfig) -> Vec<Dia
 }
 
 /// Checks whether any fragment file exceeds the fragment token limit.
-pub fn check_fragments(config: &SkilletConfig, fragments_dir: &Path) -> Vec<Diagnostic> {
-    if !fragments_dir.exists() {
-        return vec![];
-    }
-    let Ok(entries) = std::fs::read_dir(fragments_dir) else {
-        return vec![];
-    };
-
-    entries
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            let fname = path.file_name()?.to_string_lossy().into_owned();
-            let frag_name = fname.strip_suffix(".fragment.pan")?.to_string();
-            let content = std::fs::read_to_string(&path).ok()?;
-            let tokens = count_tokens(&content, &config.build.tokenizer);
+pub fn check_fragments(config: &SkilletConfig, ctx: &LintContext) -> Vec<Diagnostic> {
+    ctx.fragment_tokens
+        .iter()
+        .filter_map(|(frag_name, &tokens)| {
             if tokens > config.lint.max_fragment_tokens {
                 Some(diag(
                     Severity::Warning,

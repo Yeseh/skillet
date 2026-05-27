@@ -12,16 +12,49 @@
 //! Individual rule implementations live in the `rules` submodule — one file
 //! per rule (or closely-related rule group).
 
-use crate::config::SkilletConfig;
-use crate::workspace::{self, SkillSource};
-use anyhow::Result;
-use owo_colors::OwoColorize;
-use rayon::prelude::*;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 pub mod pipeline;
-mod rules;
+pub mod rules;
+
+// ── LintContext ───────────────────────────────────────────────────────────────
+
+/// Pre-loaded workspace state for lint rule execution.
+/// Built by the CLI; consumed by pure rule functions.
+#[derive(Debug, Default)]
+pub struct LintContext {
+    /// Files known to exist relative to each skill dir.
+    /// Key: skill name, Value: set of relative paths.
+    pub skill_files: HashMap<String, HashSet<String>>,
+
+    /// Commands confirmed present on PATH.
+    pub known_commands: HashSet<String>,
+
+    /// Skill directory names that exist in the workspace.
+    pub known_skill_dirs: HashSet<String>,
+
+    /// SHA-256 hash of each compiled SKILL.md (key: skill name).
+    pub compiled_hashes: HashMap<String, String>,
+
+    /// Full text of each compiled SKILL.md (key: skill name).
+    /// Needed by duplication detection.
+    pub compiled_texts: HashMap<String, String>,
+
+    /// SHA-256 hash of each fragment file (key: fragment name).
+    pub fragment_hashes: HashMap<String, String>,
+
+    /// Token count per fragment (key: fragment name).
+    pub fragment_tokens: HashMap<String, u32>,
+
+    /// All fragment names present in the fragments directory.
+    pub fragment_names: Vec<String>,
+
+    /// Activation token count per skill from lockfile (key: skill name).
+    /// Used by oversized rule when lockfile data is available.
+    pub activation_tokens: HashMap<String, u32>,
+}
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -109,220 +142,9 @@ impl LintOptions {
     }
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-/// Runs all enabled lint rules across the workspace (or a single skill/file).
-///
-/// Returns `Ok(true)` when the workspace is clean (no errors after severity
-/// promotion).  Prints results to stdout according to `opts.format`.
-///
-/// # Errors
-///
-/// Returns an error only if the workspace cannot be read (e.g. missing
-/// `skillet.toml`).  Individual rule failures are reported as diagnostics, not
-/// as `Err`.
-pub fn run(
-    workspace: &Path,
-    skill_name: Option<&str>,
-    opts: &LintOptions,
-    config: &SkilletConfig,
-) -> Result<bool> {
-    let total_start = std::time::Instant::now();
-
-    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
-    let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
-    let fragments_dir = workspace.join(&config.workspace.fragments_dir);
-    let mut lockfile = crate::lockfile::read(workspace)?;
-
-    let all_sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
-
-    // Determine which skills to scan.  In --file mode we find the owning skill
-    // by matching source_path; the full all_sources list still provides skill
-    // names for cross-ref validation.
-    let scan_targets: Vec<&SkillSource> = match (&opts.file_path, skill_name) {
-        (Some(path), _) => {
-            // Canonicalise so relative and absolute paths both match.
-            let abs = if path.is_absolute() {
-                path.clone()
-            } else {
-                workspace.join(path)
-            };
-            all_sources
-                .iter()
-                .filter(|s| s.source_path == abs)
-                .collect()
-        }
-        (None, Some(name)) => all_sources.iter().filter(|s| s.name == name).collect(),
-        (None, None) => all_sources.iter().collect(),
-    };
-
-    // ── Phase 1: Parallel source scan ────────────────────────────────────────
-    let p1_start = std::time::Instant::now();
-    let source_files = pipeline::scan_sources(
-        &scan_targets
-            .iter()
-            .map(|s| (*s).clone())
-            .collect::<Vec<_>>(),
-        &config.build.tokenizer,
-    );
-    let p1_elapsed = p1_start.elapsed();
-
-    // ── Phase 2: Parallel ref extraction ─────────────────────────────────────
-    let p2_start = std::time::Instant::now();
-    let skill_names: Vec<&str> = all_sources.iter().map(|s| s.name.as_str()).collect();
-    let (source_files, _all_refs) = pipeline::extract_refs(source_files, &skill_names);
-    let p2_elapsed = p2_start.elapsed();
-
-    let files_scanned = source_files.len();
-
-    // ── Phase 3: rayon::join(branch A, branch B) ─────────────────────────────
-    let p3_start = std::time::Instant::now();
-
-    let run_workspace_rules = opts.file_path.is_none() && skill_name.is_none();
-
-    let (branch_a, (branch_b, dup_updated_sigs)) = rayon::join(
-        || -> Vec<Diagnostic> {
-            source_files
-                .par_iter()
-                .filter(|sf| matches!(sf.file_type, pipeline::SourceFileType::Skill))
-                .flat_map(|sf| {
-                    lint_skill(
-                        sf,
-                        config,
-                        &all_sources,
-                        &fragments_dir,
-                        &skills_src_dir,
-                        &lockfile,
-                    )
-                })
-                .collect()
-        },
-        || -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
-            if run_workspace_rules {
-                lint_workspace(
-                    config,
-                    &all_sources,
-                    &source_files,
-                    &fragments_dir,
-                    &lockfile,
-                )
-            } else {
-                (vec![], vec![])
-            }
-        },
-    );
-
-    let p3_elapsed = p3_start.elapsed();
-
-    let mut diagnostics: Vec<Diagnostic> = branch_a;
-    diagnostics.extend(branch_b);
-
-    // Write back updated MinHash signatures to lockfile if any were computed.
-    if !dup_updated_sigs.is_empty() {
-        let mut lockfile_modified = false;
-        for (skill_nm, sig) in dup_updated_sigs {
-            if let Some(entry) = lockfile.skills.get_mut(&skill_nm) {
-                entry.minhash = sig;
-                lockfile_modified = true;
-            }
-        }
-        if lockfile_modified {
-            let _ = crate::lockfile::write(workspace, &lockfile);
-        }
-    }
-
-    // Drop rules disabled in skillet.toml.
-    diagnostics.retain(|d| !config.lint.disable.contains(&d.rule));
-
-    // Strict mode: promote warnings to errors.
-    if opts.strict {
-        for d in &mut diagnostics {
-            if d.severity == Severity::Warning {
-                d.severity = Severity::Error;
-            }
-        }
-    }
-
-    // Drop info diagnostics unless --pedantic.
-    if !opts.pedantic {
-        diagnostics.retain(|d| d.severity != Severity::Info);
-    }
-
-    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
-    let total_elapsed = total_start.elapsed();
-
-    match opts.format {
-        OutputFormat::Text => print_text(
-            &diagnostics,
-            files_scanned,
-            total_elapsed.as_millis(),
-            opts.verbose.then_some((p1_elapsed, p2_elapsed, p3_elapsed)),
-        ),
-        OutputFormat::Json => print_json(&diagnostics)?,
-        OutputFormat::Silent => {}
-    }
-
-    Ok(!has_errors)
-}
-
-// ── Per-skill lint pass ───────────────────────────────────────────────────────
-
-fn lint_skill(
-    source: &pipeline::SourceFile,
-    config: &SkilletConfig,
-    all_sources: &[SkillSource],
-    fragments_dir: &Path,
-    skills_src_dir: &Path,
-    lockfile: &crate::lockfile::Lockfile,
-) -> Vec<Diagnostic> {
-    let mut diags = Vec::new();
-
-    // If Phase 1 had a read error, surface it and stop.
-    if !source.parse_errors.is_empty() && source.raw.is_empty() {
-        diags.extend(rules::invalid_frontmatter::check(source, config));
-        return diags;
-    }
-
-    diags.extend(rules::invalid_frontmatter::check(source, config));
-    diags.extend(rules::stale_refs::check(
-        source,
-        config,
-        all_sources,
-        skills_src_dir,
-    ));
-    diags.extend(rules::markdown_links::check(source, config));
-    diags.extend(rules::untyped_backtick::check(source));
-    diags.extend(rules::stale_build::check(source, fragments_dir, lockfile));
-    diags.extend(rules::oversized::check_skill(source, config, lockfile));
-    diags.extend(rules::oversized::check_description(source, config));
-
-    diags
-}
-
-// ── Workspace-level lint pass ─────────────────────────────────────────────────
-
-fn lint_workspace(
-    config: &SkilletConfig,
-    all_sources: &[SkillSource],
-    source_files: &[pipeline::SourceFile],
-    fragments_dir: &Path,
-    lockfile: &crate::lockfile::Lockfile,
-) -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
-    let mut diags = Vec::new();
-    diags.extend(rules::unused_fragment::check(
-        source_files,
-        fragments_dir,
-        config,
-    ));
-    diags.extend(rules::oversized::check_fragments(config, fragments_dir));
-    let (dup_diags, updated_sigs) = rules::duplication::check(all_sources, lockfile);
-    diags.extend(dup_diags);
-    (diags, updated_sigs)
-}
-
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-pub(crate) fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {
+pub fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {
     Diagnostic {
         rule: rule.to_string(),
         severity,
@@ -336,7 +158,7 @@ pub(crate) fn diag(severity: Severity, skill: &str, rule: &str, message: String)
     }
 }
 
-pub(crate) fn diag_located(
+pub fn diag_located(
     severity: Severity,
     skill: &str,
     rule: &str,
@@ -358,112 +180,37 @@ pub(crate) fn diag_located(
     }
 }
 
-// ── Output ────────────────────────────────────────────────────────────────────
-
-fn print_text(
-    diagnostics: &[Diagnostic],
-    files_scanned: usize,
-    elapsed_ms: u128,
-    phase_timings: Option<(
-        std::time::Duration,
-        std::time::Duration,
-        std::time::Duration,
-    )>,
-) {
-    if diagnostics.is_empty() {
-        println!("{}", "no issues found".green());
-    } else {
-        for d in diagnostics {
-            let tag = match d.severity {
-                Severity::Error => "error".red().bold().to_string(),
-                Severity::Warning => "warning".yellow().bold().to_string(),
-                Severity::Info => "info".cyan().bold().to_string(),
-            };
-            let location = match (&d.path, d.line, d.col) {
-                (Some(p), Some(l), Some(c)) => format!(" ({}:{}:{})", p, l, c),
-                (Some(p), Some(l), None) => format!(" ({}:{})", p, l),
-                (Some(p), None, _) => format!(" ({})", p),
-                _ => String::new(),
-            };
-            println!("[{tag}] {} ({}) {}{}", d.skill, d.rule, d.message, location);
-        }
-        let errors = diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .count();
-        let warnings = diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Warning)
-            .count();
-        let infos = diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Info)
-            .count();
-        if infos > 0 {
-            println!(
-                "\n{} error(s), {} warning(s), {} info(s)",
-                errors, warnings, infos
-            );
-        } else {
-            println!("\n{} error(s), {} warning(s)", errors, warnings);
-        }
-    }
-    println!(
-        "{}",
-        format!(
-            "scanned {} file{} in {}ms",
-            files_scanned,
-            if files_scanned == 1 { "" } else { "s" },
-            elapsed_ms
-        )
-        .dimmed()
-    );
-    if let Some((p1, p2, p3)) = phase_timings {
-        println!(
-            "{}",
-            format!(
-                "  phase 1 (scan): {}ms  phase 2 (refs): {}ms  phase 3 (rules): {}ms",
-                p1.as_millis(),
-                p2.as_millis(),
-                p3.as_millis(),
-            )
-            .dimmed()
-        );
-    }
-}
-
-fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(diagnostics)?);
-    Ok(())
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::SkilletConfig;
+    use crate::lint::pipeline::SourceInput;
+    use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn make_source_file(dir: &Path, name: &str, content: &str) -> pipeline::SourceFile {
         let skill_dir = dir.join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
         let source_path = skill_dir.join(format!("{name}.pan"));
-        fs::write(&source_path, content).unwrap();
-        let skill_out_dir = dir.join("skills").join(name);
-        let src = SkillSource {
+        let input = SourceInput {
             name: name.to_string(),
             source_path,
             skill_dir,
-            skill_out_dir,
+            skill_out_dir: dir.join("skills").join(name),
+            content: content.to_string(),
+            reference_docs: vec![],
         };
-        let files = pipeline::scan_sources(&[src], "cl100k_base");
+        let files = pipeline::scan_sources(&[input], "cl100k_base");
         let skill_names = vec![name];
         let (mut files, _) = pipeline::extract_refs(files, &skill_names);
         files.remove(0)
     }
 
+    #[allow(dead_code)]
     fn init_workspace(dir: &Path) {
         let cfg = SkilletConfig::default();
         fs::write(dir.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
@@ -518,12 +265,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee `ref::missing.sh`\n",
         );
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let ctx = LintContext::default();
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(diags.iter().any(|d| d.rule == "stale-path-ref"));
     }
 
@@ -535,13 +278,11 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee `ref::helper.sh`\n",
         );
-        fs::write(sf.skill_dir.join("helper.sh"), "").unwrap();
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let mut ctx = LintContext::default();
+        let mut files = HashSet::new();
+        files.insert("helper.sh".to_string());
+        ctx.skill_files.insert("my-skill".to_string(), files);
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(diags.is_empty());
     }
 
@@ -553,12 +294,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee `skill::nonexistent`\n",
         );
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let ctx = LintContext::default();
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(diags.iter().any(|d| d.rule == "stale-skill-ref"));
     }
 
@@ -570,12 +307,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee `var::missing_var`\n",
         );
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let ctx = LintContext::default();
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(diags.iter().any(|d| d.rule == "stale-var-ref"));
     }
 
@@ -587,12 +320,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nProject: `var::project_name`\n",
         );
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let ctx = LintContext::default();
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(!diags.iter().any(|d| d.rule == "stale-var-ref"));
     }
 
@@ -604,12 +333,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nCI: `env::UNKNOWN_ENV`\n",
         );
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let ctx = LintContext::default();
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(diags.iter().any(|d| d.rule == "stale-env-ref"));
     }
 
@@ -621,20 +346,16 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nCI: `env::CI`\n",
         );
-        let diags = rules::stale_refs::check(
-            &sf,
-            &SkilletConfig::default(),
-            &[],
-            &tmp.path().join("src/skills"),
-        );
+        let ctx = LintContext::default();
+        let diags = rules::stale_refs::check(&sf, &SkilletConfig::default(), &ctx);
         assert!(!diags.iter().any(|d| d.rule == "stale-env-ref"));
     }
 
     #[test]
     fn check_unused_fragments_warns_on_unreferenced_fragment() {
-        let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("unused.fragment.pan"), "# unused\n").unwrap();
-        let diags = rules::unused_fragment::check(&[], tmp.path(), &SkilletConfig::default());
+        let mut ctx = LintContext::default();
+        ctx.fragment_names.push("unused".to_string());
+        let diags = rules::unused_fragment::check(&[], &ctx, &SkilletConfig::default());
         assert!(diags
             .iter()
             .any(|d| d.rule == "unused-fragment" && d.message.contains("unused")));
@@ -643,174 +364,14 @@ mod tests {
     #[test]
     fn check_unused_fragments_silent_when_fragment_is_used() {
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("note.fragment.pan"), "# note\n").unwrap();
         let sf = make_source_file(
             tmp.path(),
             "diagnose",
             "---\nname: diagnose\ndescription: x\n---\n\n{{> note }}\n",
         );
-        let diags = rules::unused_fragment::check(&[sf], tmp.path(), &SkilletConfig::default());
+        let mut ctx = LintContext::default();
+        ctx.fragment_names.push("note".to_string());
+        let diags = rules::unused_fragment::check(&[sf], &ctx, &SkilletConfig::default());
         assert!(diags.is_empty());
-    }
-
-    // ── run ──────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn run_returns_true_for_clean_workspace() {
-        let tmp = TempDir::new().unwrap();
-        init_workspace(tmp.path());
-        let skill_src_dir = tmp.path().join("src/skills/good");
-        fs::create_dir_all(&skill_src_dir).unwrap();
-        fs::write(
-            skill_src_dir.join("good.pan"),
-            "---\nname: good\ndescription: a good skill\n---\n\n# Good\n",
-        )
-        .unwrap();
-        crate::compile::run(
-            tmp.path(),
-            Some("good"),
-            &Default::default(),
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-
-        let clean = run(
-            tmp.path(),
-            None,
-            &LintOptions::default(),
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-        assert!(clean);
-    }
-
-    #[test]
-    fn run_returns_false_when_errors_present() {
-        let tmp = TempDir::new().unwrap();
-        init_workspace(tmp.path());
-        let skill_src_dir = tmp.path().join("src/skills/bad");
-        fs::create_dir_all(&skill_src_dir).unwrap();
-        fs::write(
-            skill_src_dir.join("bad.pan"),
-            "---\nname: wrong-name\ndescription: x\n---\n\n# Bad\n",
-        )
-        .unwrap();
-
-        let clean = run(
-            tmp.path(),
-            None,
-            &LintOptions::default(),
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-        assert!(!clean);
-        let tmp = TempDir::new().unwrap();
-        init_workspace(tmp.path());
-        let skill_src_dir = tmp.path().join("src/skills/my-skill");
-        fs::create_dir_all(&skill_src_dir).unwrap();
-        fs::write(
-            skill_src_dir.join("my-skill.pan"),
-            "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
-        )
-        .unwrap();
-        crate::compile::run(
-            tmp.path(),
-            Some("my-skill"),
-            &Default::default(),
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-
-        let clean_normal = run(
-            tmp.path(),
-            None,
-            &LintOptions {
-                strict: false,
-                ..Default::default()
-            },
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-        let clean_strict = run(
-            tmp.path(),
-            None,
-            &LintOptions {
-                strict: true,
-                ..Default::default()
-            },
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-
-        assert!(clean_normal);
-        assert!(clean_strict);
-    }
-
-    #[test]
-    fn run_disabled_rule_suppresses_diagnostic() {
-        let tmp = TempDir::new().unwrap();
-        let custom_toml = "[workspace]\nskills_src_dir = 'src/skills'\nskills_out_dir = 'skills'\nfragments_dir = 'src/skills/_fragments'\n\
-            [lint]\nmax_activation_tokens = 4000\nmax_discovery_tokens = 100\nmax_fragment_tokens = 500\n\
-            allowed_commands = []\ndisable = ['stale-build', 'invalid-frontmatter']\n\
-            [build]\ntokenizer = 'cl100k_base'\nverify_urls = false\n\
-            [vars]\n[env]\n";
-        let config: SkilletConfig = toml::from_str(custom_toml).unwrap();
-        fs::create_dir_all(tmp.path().join("src/skills")).unwrap();
-        fs::create_dir_all(tmp.path().join("skills")).unwrap();
-        fs::create_dir_all(tmp.path().join("src/skills/_fragments")).unwrap();
-        let skill_src_dir = tmp.path().join("src/skills/bad");
-        fs::create_dir_all(&skill_src_dir).unwrap();
-        fs::write(
-            skill_src_dir.join("bad.pan"),
-            "---\nname: wrong\ndescription: x\n---\n\n# body\n",
-        )
-        .unwrap();
-
-        let clean = run(tmp.path(), None, &LintOptions::default(), &config).unwrap();
-        assert!(clean);
-    }
-
-    #[test]
-    fn run_stale_build_fires_when_skill_md_missing() {
-        let tmp = TempDir::new().unwrap();
-        init_workspace(tmp.path());
-        let skill_src_dir = tmp.path().join("src/skills/my-skill");
-        fs::create_dir_all(&skill_src_dir).unwrap();
-        fs::write(
-            skill_src_dir.join("my-skill.pan"),
-            "---\nname: my-skill\ndescription: x\n---\n\n# body\n",
-        )
-        .unwrap();
-
-        let clean = run(
-            tmp.path(),
-            None,
-            &LintOptions::default(),
-            &SkilletConfig::default(),
-        )
-        .unwrap();
-        assert!(!clean);
-    }
-
-    #[test]
-    fn run_file_mode_lints_single_file() {
-        let tmp = TempDir::new().unwrap();
-        init_workspace(tmp.path());
-        let skill_src_dir = tmp.path().join("src/skills/my-skill");
-        fs::create_dir_all(&skill_src_dir).unwrap();
-        let pan_path = skill_src_dir.join("my-skill.pan");
-        fs::write(
-            &pan_path,
-            "---\nname: wrong-name\ndescription: x\n---\n\n# body\n",
-        )
-        .unwrap();
-
-        let opts = LintOptions {
-            file_path: Some(pan_path),
-            format: OutputFormat::Silent,
-            ..Default::default()
-        };
-        let clean = run(tmp.path(), None, &opts, &SkilletConfig::default()).unwrap();
-        assert!(!clean, "invalid-frontmatter should fire in --file mode");
     }
 }

@@ -100,7 +100,7 @@ pub fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Returns `"sha256:<hex>"` of the file at `path`.
-pub(crate) fn hash_file(path: &Path) -> Result<String> {
+pub fn hash_file(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read {} for hashing", path.display()))?;
     Ok(format!(
@@ -110,7 +110,7 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
 }
 
 /// Returns `true` if `cmd` is found as a file in any directory on `PATH`.
-pub(crate) fn is_on_path(cmd: &str) -> bool {
+pub fn is_on_path(cmd: &str) -> bool {
     let Some(path_var) = std::env::var_os("PATH") else {
         return false;
     };

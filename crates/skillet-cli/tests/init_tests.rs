@@ -157,7 +157,6 @@ fn init_adopt_copies_skill_md_as_dot_pan_files() {
 
 #[test]
 fn budget_runs_on_built_workspace() {
-    // Arrange
     let tmp = TempDir::new().unwrap();
     setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/my-skill");
@@ -167,32 +166,18 @@ fn budget_runs_on_built_workspace() {
         "---\nname: my-skill\ndescription: \"does stuff\"\n---\n\n## Usage\nrun it\n",
     )
     .unwrap();
-    skillet::compile::run(
-        tmp.path(),
-        None,
-        &Default::default(),
-        &skillet::config::SkilletConfig::default(),
-    )
-    .unwrap();
+    common::run_skillet(tmp.path(), &["build"]);
 
-    // Act — should not error
-    let result = skillet::budget::run(
-        tmp.path(),
-        None,
-        skillet::budget::OutputFormat::Text,
-        &skillet::config::SkilletConfig::default(),
-    );
-
-    // Assert
+    let out = common::run_skillet(tmp.path(), &["budget"]);
     assert!(
-        result.is_ok(),
-        "budget::run should succeed on built workspace"
+        out.status.success(),
+        "budget should succeed on built workspace: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
 #[test]
 fn budget_json_format_produces_array() {
-    // Arrange
     let tmp = TempDir::new().unwrap();
     setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/my-skill");
@@ -202,29 +187,19 @@ fn budget_json_format_produces_array() {
         "---\nname: my-skill\ndescription: \"a skill\"\n---\n\n## Body\ncontent here\n",
     )
     .unwrap();
-    skillet::compile::run(
-        tmp.path(),
-        None,
-        &Default::default(),
-        &skillet::config::SkilletConfig::default(),
-    )
-    .unwrap();
+    common::run_skillet(tmp.path(), &["build"]);
 
-    // Act
-    let result = skillet::budget::run(
-        tmp.path(),
-        None,
-        skillet::budget::OutputFormat::Json,
-        &skillet::config::SkilletConfig::default(),
+    let out = common::run_skillet(tmp.path(), &["budget", "--format", "json"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("skills"),
+        "JSON output should contain skills key"
     );
-
-    // Assert
-    assert!(result.is_ok());
 }
 
 #[test]
 fn budget_single_skill_succeeds() {
-    // Arrange
     let tmp = TempDir::new().unwrap();
     setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/alpha");
@@ -234,29 +209,14 @@ fn budget_single_skill_succeeds() {
         "---\nname: alpha\ndescription: \"alpha skill\"\n---\n\n## Alpha\ncontent\n",
     )
     .unwrap();
-    skillet::compile::run(
-        tmp.path(),
-        Some("alpha"),
-        &Default::default(),
-        &skillet::config::SkilletConfig::default(),
-    )
-    .unwrap();
+    common::run_skillet(tmp.path(), &["build", "alpha"]);
 
-    // Act
-    let result = skillet::budget::run(
-        tmp.path(),
-        Some("alpha"),
-        skillet::budget::OutputFormat::Text,
-        &skillet::config::SkilletConfig::default(),
-    );
-
-    // Assert
-    assert!(result.is_ok());
+    let out = common::run_skillet(tmp.path(), &["budget", "alpha"]);
+    assert!(out.status.success());
 }
 
 #[test]
 fn budget_errors_when_skill_not_built() {
-    // Arrange
     let tmp = TempDir::new().unwrap();
     setup_workspace(tmp.path());
     let skill_dir = tmp.path().join("src/skills/unbuilt");
@@ -266,16 +226,10 @@ fn budget_errors_when_skill_not_built() {
         "---\nname: unbuilt\ndescription: \"not built yet\"\n---\n\n## Body\n",
     )
     .unwrap();
-    // deliberately skip skillet::build::run
 
-    // Act
-    let result = skillet::budget::run(
-        tmp.path(),
-        Some("unbuilt"),
-        skillet::budget::OutputFormat::Text,
-        &skillet::config::SkilletConfig::default(),
+    let out = common::run_skillet(tmp.path(), &["budget", "unbuilt"]);
+    assert!(
+        !out.status.success(),
+        "should error when SKILL.md is missing"
     );
-
-    // Assert
-    assert!(result.is_err(), "should error when SKILL.md is missing");
 }

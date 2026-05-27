@@ -2,13 +2,16 @@
 
 use crate::config::SkilletConfig;
 use crate::lint::pipeline::SourceFile;
+use crate::lint::LintContext;
 
 use super::{diag, diag_located, Diagnostic, Severity};
 
 /// Validates markdown link targets using the pre-extracted links from Phase 2.
-pub fn check(source: &SourceFile, config: &SkilletConfig) -> Vec<Diagnostic> {
+pub fn check(source: &SourceFile, config: &SkilletConfig, ctx: &LintContext) -> Vec<Diagnostic> {
     let file_path = source.source_path.to_string_lossy().to_string();
     let mut diags = Vec::new();
+    let empty_set = std::collections::HashSet::new();
+    let skill_files = ctx.skill_files.get(&source.name).unwrap_or(&empty_set);
 
     for link in &source.parsed_refs.links {
         if link.is_url {
@@ -20,23 +23,16 @@ pub fn check(source: &SourceFile, config: &SkilletConfig) -> Vec<Diagnostic> {
                     format!("URL link detected (not verified): '{}'", link.target),
                 ));
             }
-        } else {
-            let resolved = source.skill_dir.join(&link.target);
-            if !resolved.exists() {
-                diags.push(diag_located(
-                    Severity::Error,
-                    &source.name,
-                    "stale-markdown-link",
-                    format!(
-                        "markdown link target not found: '{}' (resolved to '{}')",
-                        link.target,
-                        resolved.display()
-                    ),
-                    Some(file_path.clone()),
-                    Some(link.line),
-                    Some(link.col),
-                ));
-            }
+        } else if !skill_files.contains(&link.target) {
+            diags.push(diag_located(
+                Severity::Error,
+                &source.name,
+                "stale-markdown-link",
+                format!("markdown link target not found: '{}'", link.target,),
+                Some(file_path.clone()),
+                Some(link.line),
+                Some(link.col),
+            ));
         }
     }
 
@@ -47,8 +43,8 @@ pub fn check(source: &SourceFile, config: &SkilletConfig) -> Vec<Diagnostic> {
 mod tests {
     use super::*;
     use crate::config::SkilletConfig;
-    use crate::lint::pipeline;
-    use crate::workspace::SkillSource;
+    use crate::lint::pipeline::{self, SourceInput};
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use tempfile::TempDir;
 
@@ -56,15 +52,15 @@ mod tests {
         let skill_dir = dir.join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
         let source_path = skill_dir.join(format!("{name}.pan"));
-        fs::write(&source_path, content).unwrap();
-        let skill_out_dir = dir.join("skills").join(name);
-        let src = SkillSource {
+        let input = SourceInput {
             name: name.to_string(),
             source_path,
             skill_dir,
-            skill_out_dir,
+            skill_out_dir: dir.join("skills").join(name),
+            content: content.to_string(),
+            reference_docs: vec![],
         };
-        let files = pipeline::scan_sources(&[src], "cl100k_base");
+        let files = pipeline::scan_sources(&[input], "cl100k_base");
         let (mut files, _) = pipeline::extract_refs(files, &[name]);
         files.remove(0)
     }
@@ -77,9 +73,11 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee [guide](guide.md)\n",
         );
-        fs::write(src.skill_dir.join("guide.md"), "").unwrap();
-        // Re-scan so parsed_refs are populated.
-        let diags = check(&src, &SkilletConfig::default());
+        let mut ctx = LintContext::default();
+        let mut files = HashSet::new();
+        files.insert("guide.md".to_string());
+        ctx.skill_files.insert("my-skill".to_string(), files);
+        let diags = check(&src, &SkilletConfig::default(), &ctx);
         assert!(diags.is_empty());
     }
 
@@ -91,7 +89,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee [missing](missing.md)\n",
         );
-        let diags = check(&src, &SkilletConfig::default());
+        let ctx = LintContext::default();
+        let diags = check(&src, &SkilletConfig::default(), &ctx);
         assert!(diags.iter().any(|d| d.rule == "stale-markdown-link"));
     }
 
@@ -103,7 +102,8 @@ mod tests {
             "my-skill",
             "---\nname: my-skill\ndescription: x\n---\n\nSee [docs](https://example.com)\n",
         );
-        let diags = check(&src, &SkilletConfig::default());
+        let ctx = LintContext::default();
+        let diags = check(&src, &SkilletConfig::default(), &ctx);
         assert!(diags.is_empty());
     }
 
@@ -117,7 +117,8 @@ mod tests {
         );
         let mut config = SkilletConfig::default();
         config.build.verify_urls = true;
-        let diags = check(&src, &config);
+        let ctx = LintContext::default();
+        let diags = check(&src, &config, &ctx);
         assert!(diags
             .iter()
             .any(|d| d.rule == "unverified-url-link" && d.severity == Severity::Info));

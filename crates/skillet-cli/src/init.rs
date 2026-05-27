@@ -108,7 +108,7 @@ fn adopt_skills(skills_out_dir: &Path, skills_src_dir: &Path) -> Result<()> {
             if sub_name == "reference" {
                 adopt_reference_dir(sub_path, &dest_sub_dir)?;
             } else {
-                crate::workspace::copy_dir_recursive(sub_path, &dest_sub_dir)?;
+                skillet::workspace::copy_dir_recursive(sub_path, &dest_sub_dir)?;
             }
         }
     }

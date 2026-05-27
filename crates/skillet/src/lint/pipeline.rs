@@ -7,10 +7,9 @@
 use crate::parse::SkillFrontmatter;
 use crate::refs::{ParsedRefs, RefKind};
 use crate::tokens::count_tokens;
-use crate::workspace::SkillSource;
 use rayon::prelude::*;
 use sha2::Digest;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
@@ -106,15 +105,35 @@ pub type AllRefs = Vec<Ref>;
 
 // ── Phase 1: Parallel source scan ─────────────────────────────────────────────
 
-/// Phase 1 — scans all skill sources (and their `reference/` subdirs) in
-/// parallel via `rayon::par_iter`.
+/// A pre-loaded source input for Phase 1 scanning.
 ///
-/// Reads each file, computes its SHA-256 hash, counts tokens, and parses
-/// frontmatter for `Skill` files. Assigns sequential IDs after collection.
-pub fn scan_sources(sources: &[SkillSource], tokenizer: &str) -> Vec<SourceFile> {
-    let mut files: Vec<SourceFile> = sources
+/// The CLI reads all files from disk and populates this struct; the library
+/// only operates on in-memory data.
+#[derive(Debug, Clone)]
+pub struct SourceInput {
+    /// Skill name (directory name).
+    pub name: String,
+    /// Absolute path to the `.pan` source file.
+    pub source_path: PathBuf,
+    /// Absolute path to the skill's source directory.
+    pub skill_dir: PathBuf,
+    /// Absolute path to the skill's compiled output directory.
+    pub skill_out_dir: PathBuf,
+    /// File content (already read from disk by the caller).
+    pub content: String,
+    /// Reference documents: (path, content) pairs from `reference/` subdir.
+    pub reference_docs: Vec<(PathBuf, String)>,
+}
+
+/// Phase 1 — scans all pre-loaded skill sources in parallel via
+/// `rayon::par_iter`.
+///
+/// Computes SHA-256 hashes, counts tokens, and parses frontmatter for `Skill`
+/// files. Assigns sequential IDs after collection.
+pub fn scan_sources(inputs: &[SourceInput], tokenizer: &str) -> Vec<SourceFile> {
+    let mut files: Vec<SourceFile> = inputs
         .par_iter()
-        .flat_map(|src| scan_skill_files(src, tokenizer))
+        .flat_map(|input| scan_input(input, tokenizer))
         .collect();
     // Assign stable sequential IDs after parallel flat_map.
     for (i, sf) in files.iter_mut().enumerate() {
@@ -123,66 +142,56 @@ pub fn scan_sources(sources: &[SkillSource], tokenizer: &str) -> Vec<SourceFile>
     files
 }
 
-/// Scans the `.pan` source file and any `reference/` docs for one skill.
-fn scan_skill_files(src: &SkillSource, tokenizer: &str) -> Vec<SourceFile> {
+/// Scans the pre-loaded `.pan` content and any reference docs for one skill.
+fn scan_input(input: &SourceInput, tokenizer: &str) -> Vec<SourceFile> {
     let mut files = Vec::new();
 
     // Primary .pan source file.
-    files.push(
-        match read_and_scan(src, &src.source_path, SourceFileType::Skill, tokenizer) {
-            Ok(sf) => sf,
-            Err(e) => SourceFile {
-                id: 0,
-                file_type: SourceFileType::Skill,
-                name: src.name.clone(),
-                source_path: src.source_path.clone(),
-                skill_dir: src.skill_dir.clone(),
-                skill_out_dir: src.skill_out_dir.clone(),
-                raw: String::new(),
-                source_hash: String::new(),
-                token_count: 0,
-                frontmatter: None,
-                parse_errors: vec![format!("cannot read source: {e}")],
-                parsed_refs: ParsedRefs::default(),
-            },
-        },
+    let sf = scan_content(
+        &input.name,
+        &input.source_path,
+        &input.skill_dir,
+        &input.skill_out_dir,
+        &input.content,
+        SourceFileType::Skill,
+        tokenizer,
     );
+    files.push(sf);
 
-    // Reference documents under `{skill_dir}/reference/`.
-    let ref_dir = src.skill_dir.join("reference");
-    if ref_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&ref_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Ok(sf) =
-                        read_and_scan(src, &path, SourceFileType::ReferenceDocument, tokenizer)
-                    {
-                        files.push(sf);
-                    }
-                }
-            }
-        }
+    // Reference documents.
+    for (path, content) in &input.reference_docs {
+        let sf = scan_content(
+            &input.name,
+            path,
+            &input.skill_dir,
+            &input.skill_out_dir,
+            content,
+            SourceFileType::ReferenceDocument,
+            tokenizer,
+        );
+        files.push(sf);
     }
 
     files
 }
 
-fn read_and_scan(
-    src: &SkillSource,
-    path: &Path,
+fn scan_content(
+    name: &str,
+    path: &PathBuf,
+    skill_dir: &PathBuf,
+    skill_out_dir: &PathBuf,
+    raw: &str,
     file_type: SourceFileType,
     tokenizer: &str,
-) -> anyhow::Result<SourceFile> {
-    let raw = std::fs::read_to_string(path)?;
+) -> SourceFile {
     let source_hash = format!(
         "sha256:{}",
         hex::encode(sha2::Sha256::digest(raw.as_bytes()))
     );
-    let token_count = count_tokens(&raw, tokenizer);
+    let token_count = count_tokens(raw, tokenizer);
 
     let (frontmatter, parse_errors) = if matches!(file_type, SourceFileType::Skill) {
-        match crate::parse::parse_frontmatter(&raw) {
+        match crate::parse::parse_frontmatter(raw) {
             Ok(fm) => (fm, vec![]),
             Err(e) => (None, vec![e.to_string()]),
         }
@@ -190,20 +199,20 @@ fn read_and_scan(
         (None, vec![])
     };
 
-    Ok(SourceFile {
+    SourceFile {
         id: 0, // Reassigned by scan_sources after collection.
         file_type,
-        name: src.name.clone(),
-        source_path: path.to_path_buf(),
-        skill_dir: src.skill_dir.clone(),
-        skill_out_dir: src.skill_out_dir.clone(),
-        raw,
+        name: name.to_string(),
+        source_path: path.clone(),
+        skill_dir: skill_dir.clone(),
+        skill_out_dir: skill_out_dir.clone(),
+        raw: raw.to_string(),
         source_hash,
         token_count,
         frontmatter,
         parse_errors,
         parsed_refs: ParsedRefs::default(),
-    })
+    }
 }
 
 // ── Phase 2: Parallel ref extraction ──────────────────────────────────────────
@@ -306,28 +315,29 @@ fn build_all_refs(source_files: &[SourceFile]) -> AllRefs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::SkillSource;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn make_skill(tmp: &TempDir, name: &str, content: &str) -> SkillSource {
+    fn make_input(tmp: &TempDir, name: &str, content: &str) -> SourceInput {
         let skill_dir = tmp.path().join("src/skills").join(name);
         fs::create_dir_all(&skill_dir).unwrap();
         let source_path = skill_dir.join(format!("{name}.pan"));
-        fs::write(&source_path, content).unwrap();
-        SkillSource {
+        SourceInput {
             name: name.to_string(),
             source_path,
             skill_dir,
             skill_out_dir: tmp.path().join("skills").join(name),
+            content: content.to_string(),
+            reference_docs: vec![],
         }
     }
 
     #[test]
     fn scan_sources_reads_raw_and_computes_hash() {
         let tmp = TempDir::new().unwrap();
-        let src = make_skill(&tmp, "alpha", "---\nname: alpha\ndescription: x\n---\n");
-        let files = scan_sources(&[src], "cl100k_base");
+        let input = make_input(&tmp, "alpha", "---\nname: alpha\ndescription: x\n---\n");
+        let files = scan_sources(&[input], "cl100k_base");
         assert_eq!(files.len(), 1);
         let sf = &files[0];
         assert_eq!(sf.name, "alpha");
@@ -339,12 +349,12 @@ mod tests {
     #[test]
     fn scan_sources_parses_frontmatter() {
         let tmp = TempDir::new().unwrap();
-        let src = make_skill(
+        let input = make_input(
             &tmp,
             "beta",
             "---\nname: beta\ndescription: a beta skill\n---\n",
         );
-        let files = scan_sources(&[src], "cl100k_base");
+        let files = scan_sources(&[input], "cl100k_base");
         let fm = files[0].frontmatter.as_ref().expect("frontmatter");
         assert_eq!(fm.name.as_deref(), Some("beta"));
         assert_eq!(fm.description.as_deref(), Some("a beta skill"));
@@ -353,12 +363,21 @@ mod tests {
     #[test]
     fn scan_sources_discovers_reference_documents() {
         let tmp = TempDir::new().unwrap();
-        let src = make_skill(&tmp, "gamma", "---\nname: gamma\ndescription: g\n---\n");
-        let ref_dir = src.skill_dir.join("reference");
-        fs::create_dir_all(&ref_dir).unwrap();
-        fs::write(ref_dir.join("guide.md"), "# Guide\n").unwrap();
+        let skill_dir = tmp.path().join("src/skills/gamma");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let input = SourceInput {
+            name: "gamma".to_string(),
+            source_path: skill_dir.join("gamma.pan"),
+            skill_dir: skill_dir.clone(),
+            skill_out_dir: tmp.path().join("skills/gamma"),
+            content: "---\nname: gamma\ndescription: g\n---\n".to_string(),
+            reference_docs: vec![(
+                skill_dir.join("reference/guide.md"),
+                "# Guide\n".to_string(),
+            )],
+        };
 
-        let files = scan_sources(&[src], "cl100k_base");
+        let files = scan_sources(&[input], "cl100k_base");
         assert_eq!(files.len(), 2);
         let ref_file = files
             .iter()
@@ -369,8 +388,8 @@ mod tests {
     #[test]
     fn scan_sources_assigns_sequential_ids() {
         let tmp = TempDir::new().unwrap();
-        let a = make_skill(&tmp, "aaa", "---\nname: aaa\ndescription: x\n---\n");
-        let b = make_skill(&tmp, "bbb", "---\nname: bbb\ndescription: y\n---\n");
+        let a = make_input(&tmp, "aaa", "---\nname: aaa\ndescription: x\n---\n");
+        let b = make_input(&tmp, "bbb", "---\nname: bbb\ndescription: y\n---\n");
         let files = scan_sources(&[a, b], "cl100k_base");
         let ids: Vec<usize> = files.iter().map(|sf| sf.id).collect();
         assert!(ids.contains(&0));
@@ -380,12 +399,12 @@ mod tests {
     #[test]
     fn extract_refs_populates_typed_refs() {
         let tmp = TempDir::new().unwrap();
-        let src = make_skill(
+        let input = make_input(
             &tmp,
             "delta",
             "---\nname: delta\ndescription: x\n---\n\nSee `ref::helper.sh`\n",
         );
-        let files = scan_sources(&[src], "cl100k_base");
+        let files = scan_sources(&[input], "cl100k_base");
         let (files, all_refs) = extract_refs(files, &["delta"]);
         assert!(!files[0].parsed_refs.typed.is_empty());
         let path_refs: Vec<_> = all_refs

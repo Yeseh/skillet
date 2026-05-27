@@ -1,17 +1,15 @@
 //! Rule: `stale-build` — verifies the compiled `SKILL.md` matches the source.
 
 use crate::lint::pipeline::SourceFile;
+use crate::lint::LintContext;
 use crate::lockfile::Lockfile;
-use crate::workspace::hash_file;
-use std::path::Path;
 
 use super::{diag, Diagnostic, Severity};
 
-/// Checks staleness using the pre-computed source hash from Phase 1.
-pub fn check(source: &SourceFile, fragments_dir: &Path, lockfile: &Lockfile) -> Vec<Diagnostic> {
-    let output_path = source.skill_out_dir.join("SKILL.md");
-
-    if !output_path.exists() {
+/// Checks staleness using the pre-computed source hash from Phase 1 and
+/// pre-loaded hashes from `LintContext`.
+pub fn check(source: &SourceFile, lockfile: &Lockfile, ctx: &LintContext) -> Vec<Diagnostic> {
+    if !ctx.compiled_hashes.contains_key(&source.name) {
         return vec![diag(
             Severity::Error,
             &source.name,
@@ -39,39 +37,15 @@ pub fn check(source: &SourceFile, fragments_dir: &Path, lockfile: &Lockfile) -> 
         )];
     }
 
-    // If Phase 1 didn't produce a hash (read error), fall back to hashing now.
-    if source.source_hash.is_empty() {
-        match hash_file(&source.source_path) {
-            Ok(h) if h != entry.source_hash => {
-                return vec![diag(
-                    Severity::Error,
-                    &source.name,
-                    "stale-build",
-                    "SKILL.md is out of date — run `skillet build`".into(),
-                )];
-            }
-            Err(e) => {
-                return vec![diag(
-                    Severity::Error,
-                    &source.name,
-                    "stale-build",
-                    format!("cannot hash source: {e}"),
-                )];
-            }
-            _ => {}
-        }
-    }
-
     for frag_name in &entry.fragments_used {
-        let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        let current = match hash_file(&frag_path) {
-            Ok(h) => h,
-            Err(e) => {
+        let current = match ctx.fragment_hashes.get(frag_name.as_str()) {
+            Some(h) => h.as_str(),
+            None => {
                 return vec![diag(
                     Severity::Error,
                     &source.name,
                     "stale-build",
-                    format!("cannot hash fragment '{frag_name}': {e}"),
+                    format!("cannot hash fragment '{frag_name}': not found"),
                 )]
             }
         };
@@ -90,19 +64,8 @@ pub fn check(source: &SourceFile, fragments_dir: &Path, lockfile: &Lockfile) -> 
         }
     }
 
-    let compiled_hash = match hash_file(&output_path) {
-        Ok(h) => h,
-        Err(e) => {
-            return vec![diag(
-                Severity::Error,
-                &source.name,
-                "stale-build",
-                format!("cannot read SKILL.md: {e}"),
-            )]
-        }
-    };
-
-    if compiled_hash != entry.compiled_hash {
+    let compiled_hash = ctx.compiled_hashes.get(&source.name).unwrap();
+    if compiled_hash != &entry.compiled_hash {
         return vec![diag(
             Severity::Error,
             &source.name,
