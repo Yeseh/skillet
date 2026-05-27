@@ -1,0 +1,38 @@
+{
+  "goalRunId": "goal-run-mpnrlu69-tbrad3",
+  "goal": "Move the lint pipeline's Phase 2 ref extraction (in `crates/skillet/src/lint/pipeline.rs`) and the `unused_fragment` rule (in `crates/skillet/src/lint/rules/unused_fragment.rs`) to use the new parser (`crate::compiler::parse::PanParse` and `crate::compiler::PanSource`) instead of regexes.\n\nSpecifically:\n1. In `ParsedRefs::extract` (in `crates/skillet/src/refs.rs`), replace the regex-based extraction of typed refs and untyped backticks with the new parser. Parse the source using `PanSource::new` + `PanParse::new` + `parse()`, then convert `Node::Ref` to `TypedRef`, `Node::RefSuspect` to `UntypedRef` (after classification), and `Node::Fragment` can be used by the fragment rule. Keep markdown link extraction via regex since the parser doesn't handle markdown links.\n\n2. In `unused_fragment.rs`, replace the `FRAGMENT_INCLUDE_RE` regex with the parser to detect fragment inclusions.\n\n3. All existing tests must continue to pass. The lint behavior should remain identical.\n\nNote the RefKind mapping:\n- `compiler::parse::RefKind::Reference` → `refs::RefKind::Ref`\n- `compiler::parse::RefKind::Path` → `refs::RefKind::Ref` (path refs are the same as ref:: for lint purposes)\n- `compiler::parse::RefKind::Skill` → `refs::RefKind::Skill`\n- `compiler::parse::RefKind::Cmd` → `refs::RefKind::Cmd`\n- `compiler::parse::RefKind::Var` → `refs::RefKind::Var`\n- `compiler::parse::RefKind::Env` → `refs::RefKind::Env`\n- `compiler::parse::RefKind::Agent` and `compiler::parse::RefKind::Url` — skip for now (not used by lint rules)\n\nFor `RefSuspect`, extract the text from source using the source_range (strip the outer backticks) and pass through `classify_untyped` to get the `UntypedRef`.\n\nFor fragment detection in `unused_fragment.rs`, parse each source file and collect `Node::Fragment` values.",
+  "steps": [
+    {
+      "id": "step-01",
+      "story": "Update lint reference extraction so supported references are recognized from the new parser while preserving the current lint-visible behavior.",
+      "functionalAcceptance": [
+        "When lint processes source text, supported typed references are detected through the new parser and appear to lint consumers with the same kinds and values expected today.",
+        "Untyped backtick references that should still be linted are detected from parsed source and classified into the same lint-visible categories as before.",
+        "Markdown links continue to be detected for linting exactly as they are today.",
+        "Parser node kinds that are not currently used by lint do not create new lint references or change existing lint outcomes."
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "step-02",
+      "story": "Update fragment-usage detection so the unused-fragment rule identifies fragment inclusions from parsed source instead of regex matching.",
+      "functionalAcceptance": [
+        "Fragment inclusions present in source files are recognized through the new parser for the purposes of the unused-fragment rule.",
+        "Fragments that are actually included are not reported as unused.",
+        "Fragments that are not included continue to be reported as unused with the same user-visible rule behavior as before."
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "step-03",
+      "story": "Confirm the lint pipeline remains behaviorally stable after the parser-based extraction changes.",
+      "functionalAcceptance": [
+        "All existing tests pass after the change.",
+        "User-visible lint behavior remains unchanged for the covered cases, including reference extraction and unused-fragment reporting.",
+        "No new lint findings are introduced solely because of unsupported parser node kinds that are intentionally out of scope."
+      ],
+      "status": "pending"
+    }
+  ],
+  "createdAt": "2026-05-27T07:51:30.709Z"
+}

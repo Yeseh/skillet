@@ -188,7 +188,7 @@ pub fn run(
                 .flat_map(|sf| {
                     lint_skill(
                         sf,
-                        &config,
+                        config,
                         &all_sources,
                         &fragments_dir,
                         &skills_src_dir,
@@ -200,7 +200,7 @@ pub fn run(
         || -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
             if run_workspace_rules {
                 lint_workspace(
-                    &config,
+                    config,
                     &all_sources,
                     &source_files,
                     &fragments_dir,

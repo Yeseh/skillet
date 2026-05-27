@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-
 pub struct Lexer<'a> {
     src: &'a str,
     pos: usize,
@@ -22,7 +21,9 @@ pub enum TokenKind {
     RefAgent,
     RefCmd,
     RefPath,
-    RefUrl
+    RefUrl,
+    RefVar,
+    RefEnv,
 }
 
 #[derive(Debug, PartialEq)]
@@ -31,14 +32,14 @@ pub struct Token {
     pub range: Range<u32>,
 }
 
-
-
 const AGENT_REF: &[u8] = b"agent::";
 const SKILL_REF: &[u8] = b"skill::";
 const CMD_REF: &[u8] = b"cmd::";
 const REFERENCE_REF: &[u8] = b"ref::";
 const PATH_REF: &[u8] = b"path::";
 const URL_REF: &[u8] = b"url::";
+const VAR_REF: &[u8] = b"var::";
+const ENV_REF: &[u8] = b"env::";
 
 impl<'a> Lexer<'a> {
     // Returns (kind, keyword_len) where keyword_len excludes the trailing "::"
@@ -56,6 +57,10 @@ impl<'a> Lexer<'a> {
             Some((TokenKind::RefPath, PATH_REF.len() - 2))
         } else if slice.starts_with(URL_REF) {
             Some((TokenKind::RefUrl, URL_REF.len() - 2))
+        } else if slice.starts_with(VAR_REF) {
+            Some((TokenKind::RefVar, VAR_REF.len() - 2))
+        } else if slice.starts_with(ENV_REF) {
+            Some((TokenKind::RefEnv, ENV_REF.len() - 2))
         } else {
             None
         }
@@ -80,7 +85,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn make_token(&self, kind: TokenKind, start: u32) -> Token {
-        Token { kind, range: start..self.pos as u32 }
+        Token {
+            kind,
+            range: start..u32::try_from(self.pos).expect("pos exceeds u32"),
+        }
     }
 
     pub fn next(&mut self) -> Option<u8> {
@@ -102,13 +110,13 @@ impl<'a> Lexer<'a> {
         let mut tokens: Vec<Token> = Vec::new();
 
         while let Some(c) = self.next() {
-            let start_pos = (self.pos - 1) as u32;
+            let start_pos = u32::try_from(self.pos - 1).expect("pos exceeds u32");
 
             let token: Option<Token> = match c {
-                b'a' | b'c' | b'p' | b'r' | b's' | b'u' => {
-                    Some(self.tick_prefixed_ref_token(start_pos)
-                        .unwrap_or_else(|| self.make_body(start_pos)))
-                },
+                b'a' | b'c' | b'e' | b'p' | b'r' | b's' | b'u' | b'v' => Some(
+                    self.tick_prefixed_ref_token(start_pos)
+                        .unwrap_or_else(|| self.make_body(start_pos)),
+                ),
                 b'`' => {
                     let p1 = self.peek(0);
                     let p2 = self.peek(1);
@@ -122,9 +130,8 @@ impl<'a> Lexer<'a> {
                     else if p1 == Some(b'`') {
                         self.pos += 1;
                         tokens.push(self.make_token(TokenKind::TickDouble, start_pos));
-                        Some(self.make_body(self.pos as u32))
-                    }
-                    else {
+                        Some(self.make_body(u32::try_from(self.pos).expect("pos exceeds u32")))
+                    } else {
                         Some(self.make_token(TokenKind::Tick, start_pos))
                     }
                 }
@@ -134,9 +141,13 @@ impl<'a> Lexer<'a> {
                     } else {
                         self.pos += 1;
                         tokens.push(self.make_token(TokenKind::FragmentOpen, start_pos));
-                        Some(self.make_fragment_id(self.pos as u32))
+                        Some(
+                            self.make_fragment_id(
+                                u32::try_from(self.pos).expect("pos exceeds u32"),
+                            ),
+                        )
                     }
-                },
+                }
                 b'<' => {
                     if self.peek(0) == Some(b'}') {
                         self.pos += 1;
@@ -144,17 +155,17 @@ impl<'a> Lexer<'a> {
                     } else {
                         None // bare '<' produces no token
                     }
-                },
+                }
                 b':' => {
                     if self.peek(0) == Some(b':') {
                         self.pos += 1;
                         tokens.push(self.make_token(TokenKind::DoubleColon, start_pos));
-                        Some(self.make_ref_value(self.pos as u32))
+                        Some(self.make_ref_value(u32::try_from(self.pos).expect("pos exceeds u32")))
                     } else {
                         Some(self.make_body(start_pos))
                     }
-                },
-                _ => Some(self.make_body(start_pos))
+                }
+                _ => Some(self.make_body(start_pos)),
             };
 
             if let Some(t) = token {
@@ -199,31 +210,30 @@ impl<'a> Lexer<'a> {
                         self.pos -= 1;
                         break;
                     }
-                },
+                }
                 b'{' => {
                     self.pos -= 1;
                     break;
-                },
-                _ => ()
+                }
+                _ => (),
             }
         }
         self.make_token(TokenKind::BodyText, start_pos)
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn slice<'a>(src: &'a str, token: &Token) -> &'a str {
-       &src[token.range.start as usize..token.range.end as usize]
+        &src[token.range.start as usize..token.range.end as usize]
     }
 
     #[test]
     fn test_simple() {
         let s = "`ref::foo/bar.md` some text {> footer <}";
-        let mut  l = Lexer::new(s);
+        let mut l = Lexer::new(s);
 
         let tokens = l.tokenize();
 
@@ -265,147 +275,146 @@ mod tests {
     }
 
     #[test]
-   fn test_tick_range_is_one_byte() {
-       // A single backtick should have a range of length 1, not 0
-       let s = "`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens.len(), 1);
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[0].range, 0..1);
-   }
-
-   #[test]
-   fn test_code_fence_is_single_body_text() {
-       // Triple backtick fence including delimiters becomes one BodyText
-       let s = "```rust\nlet x = 1;\n```";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens.len(), 1);
-       assert_eq!(tokens[0].kind, TokenKind::BodyText);
-       assert_eq!(slice(s, &tokens[0]), s); // full source, delimiters included
-   }
+    fn test_tick_range_is_one_byte() {
+        // A single backtick should have a range of length 1, not 0
+        let s = "`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[0].range, 0..1);
+    }
 
     #[test]
-   fn test_ref_without_ticks_is_body_text() {
-       let s = "skill::my-agent";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::BodyText);
-       assert_eq!(slice(s, &tokens[0]), "skill::my-agent");
-   }
-
+    fn test_code_fence_is_single_body_text() {
+        // Triple backtick fence including delimiters becomes one BodyText
+        let s = "```rust\nlet x = 1;\n```";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::BodyText);
+        assert_eq!(slice(s, &tokens[0]), s); // full source, delimiters included
+    }
 
     #[test]
-   fn test_escaped_ref_is_body_text() {
-       let s = "``skill::my-agent``";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::TickDouble);
-       assert_eq!(tokens[1].kind, TokenKind::BodyText);
-       assert_eq!(slice(s, &tokens[1]), "skill::my-agent");
-       assert_eq!(tokens[2].kind, TokenKind::TickDouble);
-   }
+    fn test_ref_without_ticks_is_body_text() {
+        let s = "skill::my-agent";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::BodyText);
+        assert_eq!(slice(s, &tokens[0]), "skill::my-agent");
+    }
 
-   #[test]
-   fn test_skill_ref() {
-       let s = "`skill::my-agent`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefSkill);
-       assert_eq!(slice(s, &tokens[1]), "skill");
-       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
-       assert_eq!(tokens[3].kind, TokenKind::RefValue);
-       assert_eq!(slice(s, &tokens[3]), "my-agent");
-       assert_eq!(tokens[4].kind, TokenKind::Tick);
-   }
+    #[test]
+    fn test_escaped_ref_is_body_text() {
+        let s = "``skill::my-agent``";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::TickDouble);
+        assert_eq!(tokens[1].kind, TokenKind::BodyText);
+        assert_eq!(slice(s, &tokens[1]), "skill::my-agent");
+        assert_eq!(tokens[2].kind, TokenKind::TickDouble);
+    }
 
-   #[test]
-   fn test_agent_ref() {
-       let s = "`agent::my-agent`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefAgent);
-       assert_eq!(slice(s, &tokens[1]), "agent");
-       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
-       assert_eq!(tokens[3].kind, TokenKind::RefValue);
-       assert_eq!(slice(s, &tokens[3]), "my-agent");
-       assert_eq!(tokens[4].kind, TokenKind::Tick);
-   }
+    #[test]
+    fn test_skill_ref() {
+        let s = "`skill::my-agent`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[1].kind, TokenKind::RefSkill);
+        assert_eq!(slice(s, &tokens[1]), "skill");
+        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+        assert_eq!(tokens[3].kind, TokenKind::RefValue);
+        assert_eq!(slice(s, &tokens[3]), "my-agent");
+        assert_eq!(tokens[4].kind, TokenKind::Tick);
+    }
 
-   #[test]
-   fn test_cmd_ref() {
-       let s = "`cmd::git push`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefCmd);
-       assert_eq!(slice(s, &tokens[1]), "cmd");
-       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
-       assert_eq!(tokens[3].kind, TokenKind::RefValue);
-       assert_eq!(slice(s, &tokens[3]), "git push");
-       assert_eq!(tokens[4].kind, TokenKind::Tick);
-   }
+    #[test]
+    fn test_agent_ref() {
+        let s = "`agent::my-agent`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[1].kind, TokenKind::RefAgent);
+        assert_eq!(slice(s, &tokens[1]), "agent");
+        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+        assert_eq!(tokens[3].kind, TokenKind::RefValue);
+        assert_eq!(slice(s, &tokens[3]), "my-agent");
+        assert_eq!(tokens[4].kind, TokenKind::Tick);
+    }
 
-   #[test]
-   fn test_reference_ref() {
-       let s = "`ref::./references/test.md`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefReference);
-       assert_eq!(slice(s, &tokens[1]), "ref");
-       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
-       assert_eq!(tokens[3].kind, TokenKind::RefValue);
-       assert_eq!(slice(s, &tokens[3]), "./references/test.md");
-       assert_eq!(tokens[4].kind, TokenKind::Tick);
-   }
+    #[test]
+    fn test_cmd_ref() {
+        let s = "`cmd::git push`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[1].kind, TokenKind::RefCmd);
+        assert_eq!(slice(s, &tokens[1]), "cmd");
+        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+        assert_eq!(tokens[3].kind, TokenKind::RefValue);
+        assert_eq!(slice(s, &tokens[3]), "git push");
+        assert_eq!(tokens[4].kind, TokenKind::Tick);
+    }
 
-   #[test]
-   fn test_unknown_keyword_is_body_text() {
-       // "foo::bar" is not a known ref type — entire thing is BodyText
-       let s = "foo::bar";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens.len(), 1);
-       assert_eq!(tokens[0].kind, TokenKind::BodyText);
-   }
+    #[test]
+    fn test_reference_ref() {
+        let s = "`ref::./references/test.md`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[1].kind, TokenKind::RefReference);
+        assert_eq!(slice(s, &tokens[1]), "ref");
+        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+        assert_eq!(tokens[3].kind, TokenKind::RefValue);
+        assert_eq!(slice(s, &tokens[3]), "./references/test.md");
+        assert_eq!(tokens[4].kind, TokenKind::Tick);
+    }
 
-   #[test]
-   fn test_path_ref() {
-       let s = "`path::some/file.md`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefPath);
-       assert_eq!(slice(s, &tokens[1]), "path");
-       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
-       assert_eq!(tokens[3].kind, TokenKind::RefValue);
-       assert_eq!(slice(s, &tokens[3]), "some/file.md");
-       assert_eq!(tokens[4].kind, TokenKind::Tick);
-   }
+    #[test]
+    fn test_unknown_keyword_is_body_text() {
+        // "foo::bar" is not a known ref type — entire thing is BodyText
+        let s = "foo::bar";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::BodyText);
+    }
 
-   #[test]
-   fn test_url_ref() {
-       let s = "`url::https://example.com`";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens[0].kind, TokenKind::Tick);
-       assert_eq!(tokens[1].kind, TokenKind::RefUrl);
-       assert_eq!(slice(s, &tokens[1]), "url");
-       assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
-       assert_eq!(tokens[3].kind, TokenKind::RefValue);
-       assert_eq!(slice(s, &tokens[3]), "https://example.com");
-       assert_eq!(tokens[4].kind, TokenKind::Tick);
-   }
+    #[test]
+    fn test_path_ref() {
+        let s = "`path::some/file.md`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[1].kind, TokenKind::RefPath);
+        assert_eq!(slice(s, &tokens[1]), "path");
+        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+        assert_eq!(tokens[3].kind, TokenKind::RefValue);
+        assert_eq!(slice(s, &tokens[3]), "some/file.md");
+        assert_eq!(tokens[4].kind, TokenKind::Tick);
+    }
 
-   #[test]
-   fn test_empty_input() {
-       let s = "";
-       let mut l = Lexer::new(s);
-       let tokens = l.tokenize();
-       assert_eq!(tokens.len(), 0);
-   }
+    #[test]
+    fn test_url_ref() {
+        let s = "`url::https://example.com`";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens[0].kind, TokenKind::Tick);
+        assert_eq!(tokens[1].kind, TokenKind::RefUrl);
+        assert_eq!(slice(s, &tokens[1]), "url");
+        assert_eq!(tokens[2].kind, TokenKind::DoubleColon);
+        assert_eq!(tokens[3].kind, TokenKind::RefValue);
+        assert_eq!(slice(s, &tokens[3]), "https://example.com");
+        assert_eq!(tokens[4].kind, TokenKind::Tick);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let s = "";
+        let mut l = Lexer::new(s);
+        let tokens = l.tokenize();
+        assert_eq!(tokens.len(), 0);
+    }
 }

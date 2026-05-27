@@ -4,7 +4,7 @@
 //! text without reading or writing files.
 
 use crate::config::{EnvVar, SkilletConfig};
-use crate::lockfile::{FragmentLockEntry, LockMeta, Lockfile, SkillEntry, SkillRefs};
+use crate::lockfile::{LockMeta, Lockfile, SkillEntry, SkillRefs};
 use crate::refs::{extract_markdown_links, extract_path_refs, typed_refs, RefKind};
 use crate::workspace::{self, SkillSource};
 use anyhow::{bail, Context, Result};
@@ -764,7 +764,7 @@ fn rebuild_fragment_entries(
             lockfile
                 .fragments
                 .entry(frag_name.clone())
-                .or_insert_with(FragmentLockEntry::default)
+                .or_default()
                 .used_by
                 .push(skill_name.clone());
         }

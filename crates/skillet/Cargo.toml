@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Jesse Wellenberg"]
 
 [dependencies]
+skillet-compiler = { path = "../skillet-compiler" }
 toml = "1.1.2+spec-1.1.0"
 serde = { version = "1", features = ["derive"] }
 walkdir = "2"

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// A discovered skill source within the workspace.
+#[allow(dead_code)]
 pub struct WorkspaceSkill {
     pub name: String,
     pub source_path: PathBuf,
@@ -15,6 +16,7 @@ pub struct WorkspaceSkill {
 
 /// Scans `src_dir` one level deep, returning skills whose directories contain
 /// a `{name}.pan` source file.  Skips dirs starting with `_` or `.`.
+#[allow(dead_code)]
 pub fn discover_skills(src_dir: &Path, out_dir: &Path) -> Result<Vec<WorkspaceSkill>> {
     let mut skills = Vec::new();
 
@@ -52,6 +54,7 @@ pub fn discover_skills(src_dir: &Path, out_dir: &Path) -> Result<Vec<WorkspaceSk
 }
 
 /// Reads the `.pan` source for a skill.
+#[allow(dead_code)]
 pub fn read_source(skill: &WorkspaceSkill) -> Result<String> {
     std::fs::read_to_string(&skill.source_path).with_context(|| {
         format!(
@@ -64,6 +67,7 @@ pub fn read_source(skill: &WorkspaceSkill) -> Result<String> {
 /// Reads all `*.fragment.pan` files from `fragments_dir`.
 ///
 /// Returns a map of fragment name (without the `.fragment.pan` suffix) to content.
+#[allow(dead_code)]
 pub fn read_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
     let mut map = HashMap::new();
 

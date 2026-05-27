@@ -82,10 +82,6 @@ pub fn typed_refs(text: &str) -> Vec<TypedRef> {
 /// Matches `ref::` path directives only (used for transitive cost calculation).
 static PATH_REF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`ref::([^`]+)`").unwrap());
 
-/// Matches any backtick-enclosed content that is not a typed ref directive.
-pub(crate) static UNTYPED_BACKTICK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"`([^`\n]+)`").unwrap());
-
 /// Matches standard markdown links: `[text](target)`.  Captures the target.
 pub(crate) static MARKDOWN_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
@@ -163,35 +159,63 @@ impl ParsedRefs {
     /// `skill_names` is used by the untyped-backtick classifier to recognise
     /// cross-skill references.
     pub fn extract(raw: &str, skill_names: &[&str]) -> Self {
-        let typed = typed_refs(raw);
+        use skillet_compiler::{
+            parse::{Node, PanParse, RefKind as ParserRefKind},
+            PanSource,
+        };
 
-        // Byte ranges occupied by typed refs — used to skip them in the
-        // untyped backtick scan so we don't double-report.
-        let typed_spans: Vec<(usize, usize)> = typed.iter().map(|r| (r.start, r.end)).collect();
+        let source = PanSource::new(raw.to_string(), None);
+        let mut parser = PanParse::new(&source);
+        parser.parse();
+
+        let mut typed: Vec<TypedRef> = Vec::new();
+        let mut untyped: Vec<UntypedRef> = Vec::new();
+
+        for node in &parser.nodes {
+            match node {
+                Node::Ref {
+                    kind,
+                    value,
+                    source_range,
+                } => {
+                    let lint_kind = match kind {
+                        ParserRefKind::Reference | ParserRefKind::Path => RefKind::Ref,
+                        ParserRefKind::Skill => RefKind::Skill,
+                        ParserRefKind::Cmd => RefKind::Cmd,
+                        ParserRefKind::Var => RefKind::Var,
+                        ParserRefKind::Env => RefKind::Env,
+                        ParserRefKind::Agent | ParserRefKind::Url => continue,
+                    };
+                    let loc = source.location_at(source_range.start);
+                    typed.push(TypedRef {
+                        kind: lint_kind,
+                        value: value.trim().to_string(),
+                        start: source_range.start as usize,
+                        end: source_range.end as usize,
+                        line: loc.line,
+                        col: loc.column,
+                    });
+                }
+                Node::RefSuspect { source_range } => {
+                    // Strip outer backticks and trim.
+                    let inner =
+                        &raw[source_range.start as usize + 1..source_range.end as usize - 1];
+                    let content = inner.trim();
+                    if let Some(inferred_kind) = classify_untyped(content, skill_names) {
+                        let loc = source.location_at(source_range.start);
+                        untyped.push(UntypedRef {
+                            content: content.to_string(),
+                            inferred_kind,
+                            line: loc.line,
+                            col: loc.column,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
 
         let links = extract_markdown_links(raw);
-
-        let untyped = UNTYPED_BACKTICK_RE
-            .captures_iter(raw)
-            .filter_map(|caps| {
-                let m = caps.get(0).unwrap();
-                if typed_spans
-                    .iter()
-                    .any(|&(s, e)| m.start() >= s && m.end() <= e)
-                {
-                    return None;
-                }
-                let content = caps[1].trim();
-                let inferred_kind = classify_untyped(content, skill_names)?;
-                let (line, col) = line_col(raw, m.start());
-                Some(UntypedRef {
-                    content: content.to_string(),
-                    inferred_kind,
-                    line,
-                    col,
-                })
-            })
-            .collect();
 
         Self {
             typed,
@@ -350,5 +374,72 @@ mod tests {
         let body = extract_body(raw);
         assert!(body.contains("# Body"));
         assert!(!body.contains("name: foo"));
+    }
+
+    // ── ParsedRefs::extract tests ─────────────────────────────────────────
+
+    #[test]
+    fn parsed_refs_extract_ref_kind_mapping() {
+        let raw = "`ref::foo.md` `skill::bar` `cmd::ls` `var::MY` `env::DB`";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert_eq!(refs.typed.len(), 5);
+        let kinds: Vec<RefKind> = refs.typed.iter().map(|r| r.kind).collect();
+        assert!(kinds.contains(&RefKind::Ref));
+        assert!(kinds.contains(&RefKind::Skill));
+        assert!(kinds.contains(&RefKind::Cmd));
+        assert!(kinds.contains(&RefKind::Var));
+        assert!(kinds.contains(&RefKind::Env));
+    }
+
+    #[test]
+    fn parsed_refs_extract_path_maps_to_ref_kind() {
+        let raw = "`path::some/file.md`";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert_eq!(refs.typed.len(), 1);
+        assert_eq!(refs.typed[0].kind, RefKind::Ref);
+        assert_eq!(refs.typed[0].value, "some/file.md");
+    }
+
+    #[test]
+    fn parsed_refs_extract_skips_agent_and_url() {
+        let raw = "`agent::my-agent` `url::https://example.com`";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert!(
+            refs.typed.is_empty(),
+            "agent and url refs should be skipped"
+        );
+    }
+
+    #[test]
+    fn parsed_refs_extract_untyped_suspect_classification() {
+        let raw = "`./some/path.sh`";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert_eq!(refs.untyped.len(), 1);
+        assert_eq!(refs.untyped[0].inferred_kind, "path");
+    }
+
+    #[test]
+    fn parsed_refs_extract_unclassifiable_suspect_ignored() {
+        let raw = "`plainword`";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert!(refs.untyped.is_empty());
+    }
+
+    #[test]
+    fn parsed_refs_extract_markdown_links_coexist() {
+        let raw = "`ref::foo.md` [guide](./guide.md)";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert_eq!(refs.typed.len(), 1);
+        assert_eq!(refs.links.len(), 1);
+        assert_eq!(refs.links[0].target, "./guide.md");
+    }
+
+    #[test]
+    fn parsed_refs_extract_line_col_correct() {
+        let raw = "before\n`ref::target.md`";
+        let refs = ParsedRefs::extract(raw, &[]);
+        assert_eq!(refs.typed.len(), 1);
+        assert_eq!(refs.typed[0].line, 2);
+        assert_eq!(refs.typed[0].col, 1);
     }
 }
