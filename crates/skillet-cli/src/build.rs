@@ -12,7 +12,7 @@ use skillet::compiler::{compile_pan, CompileContext, PanSource};
 use skillet::config::SkilletConfig;
 use skillet::lockfile::{self, ArtefactEntry, FragmentLockEntry, LockMeta, Lockfile};
 use skillet::tokens;
-use skillet::workspace::{hash_bytes, hash_file, ResolvedWorkspace, Skill};
+use skillet::workspace::{hash_bytes, hash_file, Skill, Workspace};
 use std::collections::HashSet;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -65,7 +65,7 @@ pub fn run(
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
-    let ws = ResolvedWorkspace::resolve(workspace_path, cfg)?;
+    let ws = Workspace::resolve(workspace_path, cfg)?;
 
     let targets: Vec<&Skill> = match skill_name {
         Some(name) => {
@@ -163,7 +163,7 @@ fn compile_one_skill(
     skill: &Skill,
     cfg: &SkilletConfig,
     workspace_path: &Path,
-    ws: &ResolvedWorkspace,
+    ws: &Workspace,
     known_skills: &HashSet<String>,
     known_agents: &HashSet<String>,
     lockfile: &mut Lockfile,
@@ -262,7 +262,7 @@ fn compile_one_skill(
     Ok(())
 }
 
-fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &ResolvedWorkspace) -> Result<()> {
+fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<()> {
     lockfile.fragments.clear();
 
     for (skill_name, entry) in &lockfile.skills {

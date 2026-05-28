@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use skillet::config::SkilletConfig;
 use skillet::lockfile;
-use skillet::workspace::{self, ResolvedWorkspace};
+use skillet::workspace::{self, Workspace};
 use std::path::Path;
 
 /// How results are rendered.
@@ -47,7 +47,7 @@ pub struct CheckReport {
 
 /// Runs freshness checks for all skills in the workspace.
 pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) -> Result<bool> {
-    let ws = ResolvedWorkspace::resolve(workspace_path, config)?;
+    let ws = Workspace::resolve(workspace_path, config)?;
     let fragments_dir = workspace_path.join(&config.workspace.fragments_dir);
 
     let lock_path = workspace_path.join("skillet.lock");

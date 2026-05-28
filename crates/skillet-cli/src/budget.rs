@@ -7,7 +7,7 @@ use skillet::lockfile;
 use skillet::parse::parse_frontmatter;
 use skillet::refs::extract_path_refs;
 use skillet::tokens::count_tokens;
-use skillet::workspace::{ResolvedWorkspace, Skill};
+use skillet::workspace::{Skill, Workspace};
 use std::path::Path;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ pub fn run(
     format: OutputFormat,
     config: &SkilletConfig,
 ) -> Result<()> {
-    let ws = ResolvedWorkspace::resolve(workspace_path, config)?;
+    let ws = Workspace::resolve(workspace_path, config)?;
     let lf = lockfile::read(workspace_path)?;
 
     let targets: Vec<&Skill> = match skill_name {
@@ -86,7 +86,7 @@ pub fn run(
 
 fn compute_row(
     skill: &Skill,
-    ws: &ResolvedWorkspace,
+    ws: &Workspace,
     lockfile: &lockfile::Lockfile,
     tokenizer: &str,
 ) -> Result<BudgetRow> {
@@ -121,7 +121,7 @@ fn compute_row(
 
 fn compute_row_from_disk(
     skill: &Skill,
-    ws: &ResolvedWorkspace,
+    ws: &Workspace,
     lockfile: &lockfile::Lockfile,
     tokenizer: &str,
 ) -> Result<BudgetRow> {

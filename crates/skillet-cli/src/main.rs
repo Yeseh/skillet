@@ -6,6 +6,7 @@ mod init;
 mod lint;
 mod net;
 mod new;
+mod skill;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -171,8 +172,8 @@ fn main() -> Result<()> {
             budget::run(&cwd, name.as_deref(), fmt, &cfg)?;
         }
         Commands::Skill { command } => match command {
-            SkillCommands::List => skillet::skill::list(),
-            SkillCommands::Print { name } => skillet::skill::run(&name)?,
+            SkillCommands::List => crate::skill::list(),
+            SkillCommands::Print { name } => crate::skill::run(&name)?,
         },
         Commands::Lint {
             name,

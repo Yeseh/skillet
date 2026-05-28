@@ -13,7 +13,7 @@ use skillet::config::SkilletConfig;
 use skillet::lint::{pipeline, rules, LintContext};
 use skillet::lockfile;
 use skillet::tokens::count_tokens;
-use skillet::workspace::{ResolvedWorkspace, Skill};
+use skillet::workspace::{Skill, Workspace};
 use std::path::Path;
 
 /// Runs all enabled lint rules across the workspace (or a single skill/file).
@@ -28,7 +28,7 @@ pub fn run(
 ) -> Result<bool> {
     let total_start = std::time::Instant::now();
 
-    let ws = ResolvedWorkspace::resolve(workspace_path, config)?;
+    let ws = Workspace::resolve(workspace_path, config)?;
     let mut lockfile = lockfile::read(workspace_path)?;
 
     let scan_targets: Vec<&Skill> = match (&opts.file_path, skill_name) {
@@ -141,7 +141,7 @@ pub fn run(
 
 // ── LintContext construction ──────────────────────────────────────────────────
 
-fn build_lint_context(ws: &ResolvedWorkspace, config: &SkilletConfig) -> Result<LintContext> {
+fn build_lint_context(ws: &Workspace, config: &SkilletConfig) -> Result<LintContext> {
     let mut ctx = LintContext::default();
 
     // Skill files and known dirs from the resolved workspace.

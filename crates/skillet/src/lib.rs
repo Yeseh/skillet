@@ -9,7 +9,6 @@ pub mod lockfile;
 pub mod net;
 pub mod parse;
 pub mod refs;
-pub mod skill;
 pub mod tokens;
 pub mod workspace;
 

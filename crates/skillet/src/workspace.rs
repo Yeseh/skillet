@@ -76,7 +76,7 @@ pub struct Agent {
 /// Fully-resolved workspace: all artifacts discovered, fragments rendered,
 /// commands checked against PATH.  Constructed once and shared by build/lint.
 #[derive(Debug, Clone)]
-pub struct ResolvedWorkspace {
+pub struct Workspace {
     /// Workspace root (where `skillet.toml` lives).
     pub root: PathBuf,
     /// All discovered skills (sorted by name).
@@ -97,7 +97,7 @@ pub struct ResolvedWorkspace {
     pub fragment_tokens: HashMap<String, u32>,
 }
 
-impl ResolvedWorkspace {
+impl Workspace {
     /// Resolves the full workspace from the given root directory and config.
     ///
     /// Performs all filesystem I/O: discovers skills, agents, fragments; renders
@@ -460,7 +460,7 @@ mod tests {
         fs::write(skill_dir.join("scripts/check.sh"), "#!/bin/bash\n").unwrap();
         fs::write(skill_dir.join("references/api/types.pan"), "# Types\n").unwrap();
 
-        let ws = ResolvedWorkspace::resolve(tmp.path(), &cfg).unwrap();
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
 
         assert_eq!(ws.skills.len(), 1);
         assert_eq!(ws.skills[0].name, "diagnose");
@@ -486,7 +486,7 @@ mod tests {
         // Also create the skills src dir so resolution doesn't fail
         fs::create_dir_all(tmp.path().join("src/skills")).unwrap();
 
-        let ws = ResolvedWorkspace::resolve(tmp.path(), &cfg).unwrap();
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
 
         assert!(ws.skills.is_empty());
         assert_eq!(ws.agents.len(), 1);
@@ -507,7 +507,7 @@ mod tests {
         fs::create_dir_all(&hidden).unwrap();
         fs::write(hidden.join(".hidden.pan"), "").unwrap();
 
-        let ws = ResolvedWorkspace::resolve(tmp.path(), &cfg).unwrap();
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
         assert!(ws.skills.is_empty());
     }
 
@@ -515,7 +515,7 @@ mod tests {
     fn resolve_returns_empty_when_dirs_missing() {
         let tmp = TempDir::new().unwrap();
         let cfg = SkilletConfig::default();
-        let ws = ResolvedWorkspace::resolve(tmp.path(), &cfg).unwrap();
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
         assert!(ws.skills.is_empty());
         assert!(ws.agents.is_empty());
     }
@@ -529,7 +529,7 @@ mod tests {
         fs::create_dir_all(&frags_dir).unwrap();
         fs::write(frags_dir.join("check-adrs.fragment.pan"), "## Check ADRs\n").unwrap();
 
-        let ws = ResolvedWorkspace::resolve(tmp.path(), &cfg).unwrap();
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
 
         assert_eq!(ws.raw_fragments.len(), 1);
         assert!(ws.raw_fragments.contains_key("check-adrs"));
@@ -554,7 +554,7 @@ mod tests {
             .unwrap();
         }
 
-        let ws = ResolvedWorkspace::resolve(tmp.path(), &cfg).unwrap();
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
         let names = ws.skill_names();
         assert!(names.contains("alpha"));
         assert!(names.contains("zulu"));

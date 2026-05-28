@@ -8,7 +8,7 @@ use crate::compiler::PanSource;
 use crate::compiler::{compile_pan, CompileContext};
 use crate::config::SkilletConfig;
 use crate::lockfile::{ArtefactEntry, FragmentLockEntry, LockMeta, Lockfile};
-use crate::workspace::{self, hash_bytes, ResolvedWorkspace, Skill};
+use crate::workspace::{self, hash_bytes, Skill, Workspace};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use std::collections::HashSet;
@@ -20,7 +20,7 @@ pub fn build_workspace(
     skill_name: Option<&str>,
     cfg: &SkilletConfig,
 ) -> Result<()> {
-    let ws = ResolvedWorkspace::resolve(workspace_path, cfg)?;
+    let ws = Workspace::resolve(workspace_path, cfg)?;
 
     let targets: Vec<&Skill> = match skill_name {
         Some(name) => {
@@ -68,7 +68,7 @@ pub fn build_workspace(
 fn compile_one_skill(
     skill: &Skill,
     cfg: &SkilletConfig,
-    ws: &ResolvedWorkspace,
+    ws: &Workspace,
     known_skills: &HashSet<String>,
     known_agents: &HashSet<String>,
     lockfile: &mut Lockfile,
@@ -163,7 +163,7 @@ fn compile_one_skill(
     Ok(())
 }
 
-fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &ResolvedWorkspace) -> Result<()> {
+fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<()> {
     lockfile.fragments.clear();
 
     for (skill_name, entry) in &lockfile.skills {

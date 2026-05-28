@@ -7,7 +7,7 @@ use skillet::{
     lint::{pipeline, rules, LintContext},
     lockfile,
     tokens::count_tokens,
-    workspace::ResolvedWorkspace,
+    workspace::Workspace,
 };
 use std::fs;
 use std::path::Path;
@@ -43,7 +43,7 @@ fn build_skill(dir: &Path, name: &str, cfg: &SkilletConfig) {
     use skillet::compiler::{compile_pan, render_fragments, CompileContext, PanSource};
     use std::collections::HashSet;
 
-    let ws = ResolvedWorkspace::resolve(dir, cfg).unwrap();
+    let ws = Workspace::resolve(dir, cfg).unwrap();
     let skill = ws.skills.iter().find(|s| s.name == name).unwrap();
 
     let source_content = fs::read_to_string(&skill.source_path).unwrap();
@@ -70,7 +70,7 @@ fn build_skill(dir: &Path, name: &str, cfg: &SkilletConfig) {
 }
 
 /// Builds LintContext from resolved workspace (same as CLI does).
-fn build_lint_context(ws: &ResolvedWorkspace, cfg: &SkilletConfig) -> LintContext {
+fn build_lint_context(ws: &Workspace, cfg: &SkilletConfig) -> LintContext {
     let mut ctx = LintContext::default();
 
     for skill in &ws.skills {
@@ -108,7 +108,7 @@ fn build_lint_context(ws: &ResolvedWorkspace, cfg: &SkilletConfig) -> LintContex
 
 /// Runs lint inline (same as CLI orchestration, minus rendering).
 fn run_lint(workspace_path: &Path, cfg: &SkilletConfig) {
-    let ws = ResolvedWorkspace::resolve(workspace_path, cfg).unwrap();
+    let ws = Workspace::resolve(workspace_path, cfg).unwrap();
     let lf = lockfile::read(workspace_path).unwrap();
 
     let ctx = build_lint_context(&ws, cfg);
