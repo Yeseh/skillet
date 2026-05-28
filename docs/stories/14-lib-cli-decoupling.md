@@ -34,7 +34,7 @@ Remove command-mirrored modules; consolidate into domain modules.
 | `compile` | `build` | `SourceUnit`, `CompileContext`, `CompileResult`, compilation pipeline |
 | `lint` | `lint/` | `LintContext`, `LintResult`, `LintDiagnostic`, all lint rules |
 | `budget` | `budget` | `BudgetReport`, `SkillBudget`, budget calculations from lockfile data |
-| `lockfile` | `lockfile` | `Lockfile`, `LockEntry`, `SkillRefs`, freshness check and diff logic |
+| `lockfile` | `lockfile` | `Lockfile`, `LockEntry`, `ArtefactRefs`, freshness check and diff logic |
 | `tokens` | `tokens` | Token counting — unchanged |
 | `parse` | `parse` | `.pan` parsing — unchanged |
 | `refs` | `refs` | Ref extraction — unchanged |

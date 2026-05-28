@@ -13,48 +13,39 @@ use skillet::config::SkilletConfig;
 use skillet::lint::{pipeline, rules, LintContext};
 use skillet::lockfile;
 use skillet::tokens::count_tokens;
-use skillet::workspace::{self, SkillSource};
-use std::collections::HashSet;
+use skillet::workspace::{ResolvedWorkspace, Skill};
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// Runs all enabled lint rules across the workspace (or a single skill/file).
 ///
 /// Returns `Ok(true)` when the workspace is clean (no errors after severity
 /// promotion).
 pub fn run(
-    workspace: &Path,
+    workspace_path: &Path,
     skill_name: Option<&str>,
     opts: &LintOptions,
     config: &SkilletConfig,
 ) -> Result<bool> {
     let total_start = std::time::Instant::now();
 
-    let skills_src_dir = workspace.join(&config.workspace.skills_src_dir);
-    let skills_out_dir = workspace.join(&config.workspace.skills_out_dir);
-    let fragments_dir = workspace.join(&config.workspace.fragments_dir);
-    let mut lockfile = lockfile::read(workspace)?;
+    let ws = ResolvedWorkspace::resolve(workspace_path, config)?;
+    let mut lockfile = lockfile::read(workspace_path)?;
 
-    let all_sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
-
-    let scan_targets: Vec<&SkillSource> = match (&opts.file_path, skill_name) {
+    let scan_targets: Vec<&Skill> = match (&opts.file_path, skill_name) {
         (Some(path), _) => {
             let abs = if path.is_absolute() {
                 path.clone()
             } else {
-                workspace.join(path)
+                workspace_path.join(path)
             };
-            all_sources
-                .iter()
-                .filter(|s| s.source_path == abs)
-                .collect()
+            ws.skills.iter().filter(|s| s.source_path == abs).collect()
         }
-        (None, Some(name)) => all_sources.iter().filter(|s| s.name == name).collect(),
-        (None, None) => all_sources.iter().collect(),
+        (None, Some(name)) => ws.skills.iter().filter(|s| s.name == name).collect(),
+        (None, None) => ws.skills.iter().collect(),
     };
 
-    // ── Build LintContext (all I/O happens here) ─────────────────────────────
-    let ctx = build_lint_context(&all_sources, &fragments_dir, config)?;
+    // ── Build LintContext from ResolvedWorkspace ─────────────────────────────
+    let ctx = build_lint_context(&ws, config)?;
 
     // ── Build SourceInputs (pre-read all files) ──────────────────────────────
     let inputs: Vec<pipeline::SourceInput> =
@@ -67,7 +58,7 @@ pub fn run(
 
     // ── Phase 2: Parallel ref extraction ─────────────────────────────────────
     let p2_start = std::time::Instant::now();
-    let skill_names: Vec<&str> = all_sources.iter().map(|s| s.name.as_str()).collect();
+    let skill_names: Vec<&str> = ws.skills.iter().map(|s| s.name.as_str()).collect();
     let (source_files, _all_refs) = pipeline::extract_refs(source_files, &skill_names);
     let p2_elapsed = p2_start.elapsed();
 
@@ -110,7 +101,7 @@ pub fn run(
             }
         }
         if lockfile_modified {
-            let _ = lockfile::write(workspace, &lockfile);
+            let _ = lockfile::write(workspace_path, &lockfile);
         }
     }
 
@@ -150,125 +141,56 @@ pub fn run(
 
 // ── LintContext construction ──────────────────────────────────────────────────
 
-fn build_lint_context(
-    all_sources: &[SkillSource],
-    fragments_dir: &Path,
-    config: &SkilletConfig,
-) -> Result<LintContext> {
+fn build_lint_context(ws: &ResolvedWorkspace, config: &SkilletConfig) -> Result<LintContext> {
     let mut ctx = LintContext::default();
 
-    // Skill files: walk each skill dir to find relative paths.
-    for src in all_sources {
-        let mut files = HashSet::new();
-        if src.skill_dir.exists() {
-            for entry in WalkDir::new(&src.skill_dir)
-                .min_depth(1)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                if entry.path().is_file() {
-                    if let Ok(rel) = entry.path().strip_prefix(&src.skill_dir) {
-                        files.insert(rel.to_string_lossy().replace('\\', "/"));
-                    }
-                }
-            }
-        }
-        ctx.skill_files.insert(src.name.clone(), files);
-        ctx.known_skill_dirs.insert(src.name.clone());
+    // Skill files and known dirs from the resolved workspace.
+    for skill in &ws.skills {
+        let files = ws.skill_files(skill);
+        ctx.skill_files.insert(skill.name.clone(), files);
+        ctx.known_skill_dirs.insert(skill.name.clone());
     }
 
-    // Known commands: collect all cmd:: refs we need to check, then probe PATH.
-    // We defer this — the rule will check ctx.known_commands, so we pre-populate
-    // with commands that are actually on PATH. We scan PATH for common commands
-    // referenced in skill files. For efficiency, we just check is_on_path for
-    // any command the rules encounter. Instead, pre-populate known_commands by
-    // scanning PATH directories (but that's expensive). The simpler approach:
-    // leave it to the caller or just check on-demand. Since the plan says the
-    // CLI populates this, let's collect all unique cmd refs and probe them.
-    // But we don't have refs yet at this point... We'll collect commands from
-    // the source files after Phase 2. Actually, the remediation plan says
-    // `ctx.known_commands.contains(cmd)` replaces `workspace::is_on_path(cmd)`.
-    // The simplest approach: eagerly populate with all commands on PATH.
-    // But that's too expensive. Instead, let's lazily fill it by checking
-    // is_on_path for each command we discover in sources. We can't do that
-    // because LintContext is built before Phase 2.
-    //
-    // Solution: pre-read all source files, extract cmd:: refs, then check PATH.
-    // But that duplicates Phase 2. Better: just check all possible commands
-    // from all source files' raw content via a quick regex scan.
-    let cmd_re = regex::Regex::new(r"`cmd::([^`]+)`").unwrap();
-    for src in all_sources {
-        if let Ok(content) = std::fs::read_to_string(&src.source_path) {
-            for caps in cmd_re.captures_iter(&content) {
-                let full_cmd = caps[1].trim();
-                let cmd = full_cmd.split_whitespace().next().unwrap_or(full_cmd);
-                if !ctx.known_commands.contains(cmd) && workspace::is_on_path(cmd) {
-                    ctx.known_commands.insert(cmd.to_string());
-                }
-            }
-        }
-    }
+    // Known commands from workspace-level scan.
+    ctx.known_commands = ws.known_commands.clone();
 
     // Compiled SKILL.md hashes and texts.
-    for src in all_sources {
-        let path = src.skill_out_dir.join("SKILL.md");
+    for skill in &ws.skills {
+        let path = skill.skill_out_dir.join("SKILL.md");
         if let Ok(text) = std::fs::read_to_string(&path) {
             let hash = format!(
                 "sha256:{}",
                 hex::encode(sha2::Sha256::digest(text.as_bytes()))
             );
-            ctx.compiled_hashes.insert(src.name.clone(), hash);
-            ctx.compiled_texts.insert(src.name.clone(), text);
+            ctx.compiled_hashes.insert(skill.name.clone(), hash);
+            ctx.compiled_texts.insert(skill.name.clone(), text);
         }
     }
 
-    // Activation tokens from compiled texts (fallback when lockfile doesn't
-    // have them).
+    // Activation tokens from compiled texts.
     for (name, text) in &ctx.compiled_texts {
         let tokens = count_tokens(text, &config.build.tokenizer);
         ctx.activation_tokens.insert(name.clone(), tokens);
     }
 
-    // Fragment data.
-    if fragments_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(fragments_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let fname = match path.file_name().and_then(|n| n.to_str()) {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-                let frag_name = match fname.strip_suffix(".fragment.pan") {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-                ctx.fragment_names.push(frag_name.clone());
-
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let hash = format!(
-                        "sha256:{}",
-                        hex::encode(sha2::Sha256::digest(content.as_bytes()))
-                    );
-                    let tokens = count_tokens(&content, &config.build.tokenizer);
-                    ctx.fragment_hashes.insert(frag_name.clone(), hash);
-                    ctx.fragment_tokens.insert(frag_name, tokens);
-                }
-            }
-        }
-    }
+    // Fragment data from the resolved workspace.
+    ctx.fragment_names = ws
+        .fragment_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    ctx.fragment_hashes = ws.fragment_hashes.clone();
+    ctx.fragment_tokens = ws.fragment_tokens.clone();
 
     Ok(ctx)
 }
 
 /// Pre-reads source file and reference docs into a `SourceInput`.
-fn build_source_input(src: &SkillSource) -> pipeline::SourceInput {
-    let content = std::fs::read_to_string(&src.source_path).unwrap_or_default();
+fn build_source_input(skill: &Skill) -> pipeline::SourceInput {
+    let content = std::fs::read_to_string(&skill.source_path).unwrap_or_default();
 
     let mut reference_docs = Vec::new();
-    let ref_dir = src.skill_dir.join("reference");
+    let ref_dir = skill.skill_dir.join("reference");
     if ref_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&ref_dir) {
             for entry in entries.flatten() {
@@ -283,10 +205,10 @@ fn build_source_input(src: &SkillSource) -> pipeline::SourceInput {
     }
 
     pipeline::SourceInput {
-        name: src.name.clone(),
-        source_path: src.source_path.clone(),
-        skill_dir: src.skill_dir.clone(),
-        skill_out_dir: src.skill_out_dir.clone(),
+        name: skill.name.clone(),
+        source_path: skill.source_path.clone(),
+        skill_dir: skill.skill_dir.clone(),
+        skill_out_dir: skill.skill_out_dir.clone(),
         content,
         reference_docs,
     }

@@ -34,7 +34,7 @@ pub struct FragmentLockEntry {
 
 /// Structured per-skill refs recorded in the lockfile.
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct SkillRefs {
+pub struct ArtefactRefs {
     /// Markdown path link targets and `ref::` paths.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
@@ -47,21 +47,25 @@ pub struct SkillRefs {
     /// URL link targets (http/https).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub urls: Vec<String>,
+    /// `agent::` references to agents (if any).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
 }
 
-impl SkillRefs {
+impl ArtefactRefs {
     /// Returns `true` when all ref lists are empty.
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
             && self.commands.is_empty()
             && self.skills.is_empty()
             && self.urls.is_empty()
+            && self.agents.is_empty()
     }
 }
 
 /// Per-skill entry in the lockfile.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SkillEntry {
+pub struct ArtefactEntry {
     /// SHA-256 hex digest of the `.skill` source file.
     pub source_hash: String,
     /// SHA-256 hex digest of the compiled `SKILL.md` output.
@@ -78,8 +82,8 @@ pub struct SkillEntry {
     /// Names of fragments inlined during compilation.
     pub fragments_used: Vec<String>,
     /// Structured refs detected in the compiled output.
-    #[serde(default, skip_serializing_if = "SkillRefs::is_empty")]
-    pub refs: SkillRefs,
+    #[serde(default, skip_serializing_if = "ArtefactRefs::is_empty")]
+    pub refs: ArtefactRefs,
     /// MinHash signature (128 × u64) for duplication detection.
     /// Populated by `skillet lint` and preserved by `skillet build` when the
     /// compiled output is unchanged.
@@ -95,7 +99,10 @@ pub struct Lockfile {
     pub meta: Option<LockMeta>,
     /// Per-skill entries, keyed by skill name.
     #[serde(default)]
-    pub skills: BTreeMap<String, SkillEntry>,
+    pub skills: BTreeMap<String, ArtefactEntry>,
+    /// Per-skill entries, keyed by skill name.
+    #[serde(default)]
+    pub agents: BTreeMap<String, ArtefactEntry>,
     /// Per-fragment entries, keyed by fragment name.
     /// Only present when at least one fragment is used.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -152,14 +159,14 @@ mod tests {
         };
         lf.skills.insert(
             "diagnose".into(),
-            SkillEntry {
+            ArtefactEntry {
                 source_hash: "sha256:abc".into(),
                 compiled_hash: "sha256:def".into(),
                 discovery_tokens: 10,
                 activation_tokens: 100,
                 transitive_tokens: 150,
                 fragments_used: vec!["check-adrs".into()],
-                refs: SkillRefs {
+                refs: ArtefactRefs {
                     commands: vec!["git".into()],
                     ..Default::default()
                 },

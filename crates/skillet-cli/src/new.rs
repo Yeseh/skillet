@@ -21,8 +21,11 @@ pub fn run(skills_src_dir: &Path, name: &str, json: bool) -> Result<()> {
     std::fs::create_dir_all(&skill_dir)
         .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
 
-    std::fs::write(&skill_file, skillet::compile::scaffold_content(name))
-        .with_context(|| format!("failed to write {}", skill_file.display()))?;
+    std::fs::write(
+        &skill_file,
+        format!("---\nname: {name}\ndescription: \"TODO: describe this skill\"\n---\n\n# {name}\n"),
+    )
+    .with_context(|| format!("failed to write {}", skill_file.display()))?;
 
     if json {
         let report = NewReport {

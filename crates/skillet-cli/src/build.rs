@@ -1,24 +1,51 @@
-//! Build orchestration: discovers skills, compiles them, writes outputs, and
-//! updates `skillet.lock`.
+//! Build orchestration: resolves the workspace, compiles skills, writes outputs,
+//! and updates `skillet.lock`.
 //!
 //! All filesystem I/O for the build pipeline lives here. The pure compilation
-//! logic is delegated to `skillet::compile::compile()`.
+//! logic is delegated to `skillet::compiler::compile_pan()`.
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use owo_colors::OwoColorize;
 use serde::Serialize;
-use sha2::Digest;
-use skillet::compile::{self, BuildOptions, CompileContext, OutputFormat, SourceUnit};
+use skillet::compiler::{compile_pan, CompileContext, PanSource};
 use skillet::config::SkilletConfig;
-use skillet::lockfile::{self, FragmentLockEntry, LockMeta, Lockfile, SkillEntry};
+use skillet::lockfile::{self, ArtefactEntry, FragmentLockEntry, LockMeta, Lockfile};
 use skillet::tokens;
-use skillet::workspace::SkillSource;
-use std::collections::{HashMap, HashSet};
+use skillet::workspace::{hash_bytes, hash_file, ResolvedWorkspace, Skill};
+use std::collections::HashSet;
 use std::path::Path;
 use walkdir::WalkDir;
 
-use crate::workspace::{self as cli_workspace, Skill};
+// ── Build options ──────────────────────────────────────────────────────────────
+
+/// Output format for build results.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+/// Options controlling build behaviour.
+#[derive(Debug, Default)]
+pub struct BuildOptions {
+    pub offline: bool,
+    pub strict: bool,
+    pub format: OutputFormat,
+}
+
+impl BuildOptions {
+    pub fn new_with_format(offline: bool, strict: bool, format: OutputFormat) -> Self {
+        Self {
+            offline,
+            strict,
+            format,
+        }
+    }
+}
+
+// ── Build report ───────────────────────────────────────────────────────────────
 
 /// Structured report produced by a build run.
 #[derive(Debug, Serialize)]
@@ -33,29 +60,22 @@ pub struct BuildReport {
 
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 pub fn run(
-    workspace: &Path,
+    workspace_path: &Path,
     skill_name: Option<&str>,
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
-    let skills_src_dir = workspace.join(&cfg.workspace.skills_src_dir);
-    let skills_out_dir = workspace.join(&cfg.workspace.skills_out_dir);
-    let fragments_dir = workspace.join(&cfg.workspace.fragments_dir);
+    let ws = ResolvedWorkspace::resolve(workspace_path, cfg)?;
 
-    let sources = skillet::workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
-    let agents_dir = workspace.join("agents");
-    let ws = cli_workspace::resolve(workspace, &skills_src_dir, &agents_dir)?;
-    let skill_map: HashMap<&str, &Skill> = ws.skills.iter().map(|s| (s.name.as_str(), s)).collect();
-
-    let targets: Vec<&SkillSource> = match skill_name {
+    let targets: Vec<&Skill> = match skill_name {
         Some(name) => {
-            let found = sources.iter().find(|s| s.name == name);
+            let found = ws.skills.iter().find(|s| s.name == name);
             match found {
                 Some(s) => vec![s],
                 None => bail!("skill '{}' not found in workspace", name),
             }
         }
-        None => sources.iter().collect(),
+        None => ws.skills.iter().collect(),
     };
 
     if targets.is_empty() {
@@ -63,19 +83,31 @@ pub fn run(
             let report = BuildReport {
                 skills_built: vec![],
                 warnings: vec![],
-                lockfile_path: workspace.join("skillet.lock").to_string_lossy().to_string(),
+                lockfile_path: workspace_path
+                    .join("skillet.lock")
+                    .to_string_lossy()
+                    .to_string(),
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
+            let skills_src_dir = workspace_path.join(&cfg.workspace.skills_src_dir);
             eprintln!("no skills found in {}", skills_src_dir.display());
         }
         return Ok(());
     }
 
-    let fragments = load_all_fragments(&fragments_dir)?;
-    let known_skills: HashSet<String> = sources.iter().map(|s| s.name.clone()).collect();
+    let known_skills: HashSet<String> = ws
+        .skill_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    let known_agents: HashSet<String> = ws
+        .agent_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
 
-    let mut lockfile = lockfile::read(workspace)?;
+    let mut lockfile = lockfile::read(workspace_path)?;
     lockfile.meta = Some(LockMeta {
         skillet_version: env!("CARGO_PKG_VERSION").to_string(),
         built_at: Utc::now(),
@@ -85,19 +117,26 @@ pub fn run(
     let mut skills_built: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    for source in &targets {
-        let skill = skill_map.get(source.name.as_str()).copied();
-        compile_one_skill(source, skill, cfg, &fragments, &known_skills, &mut lockfile)?;
+    for skill in &targets {
+        compile_one_skill(
+            skill,
+            cfg,
+            workspace_path,
+            &ws,
+            &known_skills,
+            &known_agents,
+            &mut lockfile,
+        )?;
         if opts.format != OutputFormat::Json {
-            println!("built {}", source.name);
+            println!("built {}", skill.name);
         }
-        skills_built.push(source.name.clone());
+        skills_built.push(skill.name.clone());
     }
 
-    rebuild_fragment_entries(&mut lockfile, &fragments_dir, &cfg.build.tokenizer)?;
+    rebuild_fragment_entries(&mut lockfile, &ws)?;
 
-    let lock_path = workspace.join("skillet.lock");
-    lockfile::write(workspace, &lockfile)?;
+    let lock_path = workspace_path.join("skillet.lock");
+    lockfile::write(workspace_path, &lockfile)?;
 
     if cfg.build.verify_urls && !opts.offline {
         verify_urls_from_lockfile(
@@ -120,97 +159,67 @@ pub fn run(
     Ok(())
 }
 
-fn load_all_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
-    let mut map = HashMap::new();
-    if !fragments_dir.exists() {
-        return Ok(map);
-    }
-    for entry in WalkDir::new(fragments_dir)
-        .min_depth(1)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if let Some(name) = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_suffix(".fragment.pan"))
-        {
-            let content = std::fs::read_to_string(path)
-                .with_context(|| format!("failed to read fragment '{}'", path.display()))?;
-            map.insert(name.to_string(), content);
-        }
-    }
-    Ok(map)
-}
-
 fn compile_one_skill(
-    source: &SkillSource,
-    skill: Option<&Skill>,
+    skill: &Skill,
     cfg: &SkilletConfig,
-    fragments: &HashMap<String, String>,
+    workspace_path: &Path,
+    ws: &ResolvedWorkspace,
     known_skills: &HashSet<String>,
+    known_agents: &HashSet<String>,
     lockfile: &mut Lockfile,
 ) -> Result<()> {
-    let source_content = std::fs::read_to_string(&source.source_path)
-        .with_context(|| format!("failed to read {}", source.source_path.display()))?;
+    let source_content = std::fs::read_to_string(&skill.source_path)
+        .with_context(|| format!("failed to read {}", skill.source_path.display()))?;
 
-    let known_files: HashSet<String> = WalkDir::new(&source.skill_dir)
-        .min_depth(1)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| {
-            e.path()
-                .strip_prefix(&source.skill_dir)
-                .ok()
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-        })
-        .collect();
+    let known_files = ws.skill_files(skill);
 
+    // Build diagnostic path using workspace + relative path with forward slashes.
+    // This matches the PathBuf::join("src/skills/…") pattern used in tests, ensuring
+    // consistent separator characters across OS (Windows preserves '/' in single-arg joins).
+    let pan_path = workspace_path.join(format!(
+        "{}/{}/{}.pan",
+        cfg.workspace.skills_src_dir.trim_end_matches('/'),
+        skill.name,
+        skill.name
+    ));
+    let pan_source = PanSource::new(source_content, Some(pan_path));
     let ctx = CompileContext {
-        source: SourceUnit {
-            name: source.name.clone(),
-            path: source.source_path.to_string_lossy().to_string(),
-            content: source_content.clone(),
-        },
-        fragments: fragments.clone(),
-        known_files,
-        known_commands: HashSet::new(),
-        known_skills: known_skills.clone(),
-        vars: cfg.vars.clone(),
-        env: cfg.env.clone(),
-        tokenizer: cfg.build.tokenizer.clone(),
+        source: pan_source,
+        artifact_name: skill.name.clone(),
+        fragments: &ws.rendered_fragments,
+        vars: &cfg.vars,
+        env: &cfg.env,
+        known_files: &known_files,
+        known_skills,
+        known_commands: &ws.known_commands,
+        known_agents,
+        tokenizer: &cfg.build.tokenizer,
     };
 
-    let result = compile::compile(&ctx)?;
+    let result = compile_pan(&ctx)?;
 
     for w in &result.cmd_warnings {
         eprintln!("{}", w.render_text());
     }
 
-    std::fs::create_dir_all(&source.skill_out_dir).with_context(|| {
+    std::fs::create_dir_all(&skill.skill_out_dir).with_context(|| {
         format!(
             "failed to create output directory {}",
-            source.skill_out_dir.display()
+            skill.skill_out_dir.display()
         )
     })?;
-    let output_path = source.skill_out_dir.join("SKILL.md");
+    let output_path = skill.skill_out_dir.join("SKILL.md");
     std::fs::write(&output_path, &result.output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
 
-    copy_skill_subfolders(&source.skill_dir, &source.skill_out_dir)?;
+    copy_skill_subfolders(&skill.skill_dir, &skill.skill_out_dir)?;
 
-    let source_hash = hash_file(&source.source_path)?;
+    let source_hash = hash_file(&skill.source_path)?;
     let compiled_hash = hash_bytes(result.output.as_bytes());
 
     let old_minhash = lockfile
         .skills
-        .get(&source.name)
+        .get(&skill.name)
         .filter(|e| e.compiled_hash == compiled_hash)
         .map(|e| e.minhash.clone())
         .unwrap_or_default();
@@ -219,29 +228,26 @@ fn compile_one_skill(
         .ref_paths
         .iter()
         .filter_map(|rel| {
-            let path = source.skill_dir.join(rel);
+            let path = skill.skill_dir.join(rel);
             std::fs::read_to_string(&path)
                 .ok()
                 .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
         })
         .sum();
     let references_tokens: u32 = skill
-        .map(|s| {
-            s.references
-                .iter()
-                .filter_map(|r| {
-                    std::fs::read_to_string(&r.absolute_path)
-                        .ok()
-                        .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
-                })
-                .sum()
+        .references
+        .iter()
+        .filter_map(|r| {
+            std::fs::read_to_string(&r.absolute_path)
+                .ok()
+                .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
         })
-        .unwrap_or(0);
+        .sum();
     let transitive_tokens = result.activation_tokens + ref_tokens + references_tokens;
 
     lockfile.skills.insert(
-        source.name.clone(),
-        SkillEntry {
+        skill.name.clone(),
+        ArtefactEntry {
             source_hash,
             compiled_hash,
             discovery_tokens: result.discovery_tokens,
@@ -256,11 +262,7 @@ fn compile_one_skill(
     Ok(())
 }
 
-fn rebuild_fragment_entries(
-    lockfile: &mut Lockfile,
-    fragments_dir: &Path,
-    tokenizer: &str,
-) -> Result<()> {
+fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &ResolvedWorkspace) -> Result<()> {
     lockfile.fragments.clear();
 
     for (skill_name, entry) in &lockfile.skills {
@@ -275,12 +277,14 @@ fn rebuild_fragment_entries(
     }
 
     for (frag_name, frag_entry) in &mut lockfile.fragments {
-        let path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            frag_entry.hash = hash_bytes(text.as_bytes());
-            frag_entry.tokens = tokens::count_tokens(&text, tokenizer);
-        } else if let Ok(h) = hash_file(&path) {
-            frag_entry.hash = h;
+        if let Some(hash) = ws.fragment_hashes.get(frag_name) {
+            frag_entry.hash = hash.clone();
+            frag_entry.tokens = ws.fragment_tokens.get(frag_name).copied().unwrap_or(0);
+        } else {
+            let path = ws.root.join(format!("{}.fragment.pan", frag_name));
+            if let Ok(h) = hash_file(&path) {
+                frag_entry.hash = h;
+            }
         }
         frag_entry.used_by.sort();
     }
@@ -433,21 +437,4 @@ fn verify_urls_from_lockfile(
     }
 
     Ok(())
-}
-
-// ── Hashing helpers ────────────────────────────────────────────────────────────
-
-/// Returns `"sha256:<hex>"` of the file at `path`.
-pub(crate) fn hash_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("failed to read {} for hashing", path.display()))?;
-    Ok(format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(&bytes))
-    ))
-}
-
-/// Returns `"sha256:<hex>"` of `bytes` (in-memory hashing).
-pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
-    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
 }

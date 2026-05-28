@@ -450,7 +450,7 @@ mod tests {
         for (name, sig) in sigs {
             lf.skills.insert(
                 name.clone(),
-                crate::lockfile::SkillEntry {
+                crate::lockfile::ArtefactEntry {
                     source_hash: String::new(),
                     compiled_hash: String::new(),
                     discovery_tokens: 0,

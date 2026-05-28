@@ -108,14 +108,14 @@ fn build_errors_on_nested_fragment_include() {
     .unwrap();
     fs::write(
         tmp.path().join("src/skills/_fragments/outer.fragment.pan"),
-        "## Outer\n{{> inner }}\n",
+        "## Outer\n{> inner <}\n",
     )
     .unwrap();
 
     // Append a reference to the outer fragment in the skill source
     let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
     let mut source = fs::read_to_string(&source_path).unwrap();
-    source.push_str("\n{{> outer }}\n");
+    source.push_str("\n{> outer <}\n");
     fs::write(&source_path, &source).unwrap();
 
     // Act

@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use skillet::config::SkilletConfig;
 use skillet::lockfile;
-use skillet::workspace;
+use skillet::workspace::{self, ResolvedWorkspace};
 use std::path::Path;
 
 /// How results are rendered.
@@ -47,10 +47,8 @@ pub struct CheckReport {
 
 /// Runs freshness checks for all skills in the workspace.
 pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) -> Result<bool> {
-    let skills_src_dir = workspace_path.join(&config.workspace.skills_src_dir);
-    let skills_out_dir = workspace_path.join(&config.workspace.skills_out_dir);
+    let ws = ResolvedWorkspace::resolve(workspace_path, config)?;
     let fragments_dir = workspace_path.join(&config.workspace.fragments_dir);
-    let sources = workspace::discover_skills(&skills_src_dir, &skills_out_dir)?;
 
     let lock_path = workspace_path.join("skillet.lock");
     if !lock_path.exists() {
@@ -60,19 +58,20 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
         .with_context(|| format!("failed to read {}", lock_path.display()))?;
 
     let source_names: std::collections::HashSet<&str> =
-        sources.iter().map(|s| s.name.as_str()).collect();
+        ws.skills.iter().map(|s| s.name.as_str()).collect();
 
-    let mut results: Vec<SkillResult> = sources
+    let mut results: Vec<SkillResult> = ws
+        .skills
         .iter()
-        .map(|source| {
+        .map(|skill| {
             let mut reasons: Vec<String> = Vec::new();
             let mut diffs: Vec<DiffEntry> = Vec::new();
 
-            match lockfile.skills.get(&source.name) {
+            match lockfile.skills.get(&skill.name) {
                 None => {
                     reasons.push(format!(
                         "skill '{}' not in lockfile — run `skillet build`",
-                        source.name
+                        skill.name
                     ));
                     diffs.push(DiffEntry {
                         kind: "not_in_lockfile".to_string(),
@@ -80,11 +79,11 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
                     });
                 }
                 Some(entry) => {
-                    match workspace::hash_file(&source.source_path) {
+                    match workspace::hash_file(&skill.source_path) {
                         Err(e) => reasons.push(format!("could not hash source: {}", e)),
                         Ok(current_source_hash) => {
                             if current_source_hash != entry.source_hash {
-                                let fname = source
+                                let fname = skill
                                     .source_path
                                     .file_name()
                                     .unwrap_or_default()
@@ -96,13 +95,13 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
                                 ));
                                 diffs.push(DiffEntry {
                                     kind: "source_changed".to_string(),
-                                    file: Some(source.source_path.to_string_lossy().to_string()),
+                                    file: Some(skill.source_path.to_string_lossy().to_string()),
                                 });
                             }
                         }
                     }
 
-                    let skill_md = source.skill_out_dir.join("SKILL.md");
+                    let skill_md = skill.skill_out_dir.join("SKILL.md");
                     if !skill_md.exists() {
                         reasons.push("SKILL.md is missing — run `skillet build`".to_string());
                         diffs.push(DiffEntry {
@@ -131,7 +130,7 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
 
             let fresh = reasons.is_empty();
             SkillResult {
-                name: source.name.clone(),
+                name: skill.name.clone(),
                 fresh,
                 reasons,
                 diffs,

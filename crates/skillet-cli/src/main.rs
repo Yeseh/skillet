@@ -6,7 +6,6 @@ mod init;
 mod lint;
 mod net;
 mod new;
-pub mod workspace;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -134,15 +133,14 @@ fn main() -> Result<()> {
             let cwd = std::env::current_dir()?;
             let cfg = config::load(&cwd)?;
             let fmt = match format {
-                Some(FormatArg::Json) => skillet::compile::OutputFormat::Json,
-                None => skillet::compile::OutputFormat::Text,
+                Some(FormatArg::Json) => build::OutputFormat::Json,
+                None => build::OutputFormat::Text,
             };
-            let opts =
-                skillet::compile::BuildOptions::new_with_format(offline, strict, fmt.clone());
+            let opts = build::BuildOptions::new_with_format(offline, strict, fmt.clone());
             if let Err(err) = build::run(&cwd, name.as_deref(), &opts, &cfg) {
-                if fmt == skillet::compile::OutputFormat::Text {
+                if fmt == build::OutputFormat::Text {
                     if let Some(build_failure) =
-                        err.downcast_ref::<skillet::compile::BuildFailure>()
+                        err.downcast_ref::<skillet::compiler::BuildFailure>()
                     {
                         eprintln!("{}", build_failure.render_text());
                         std::process::exit(1);

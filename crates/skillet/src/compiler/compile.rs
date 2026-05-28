@@ -9,8 +9,15 @@
 //! - **Single tiktoken pass** over the fully assembled output string at the end.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
+use std::sync::LazyLock;
+
+use anyhow::Context as _;
+use gray_matter::{engine::YAML, Matter};
+use serde::Deserialize;
 
 use crate::config::EnvVar;
+use crate::lockfile::ArtefactRefs;
 
 use super::{
     parse::{Node, PanParse, RefKind},
@@ -46,7 +53,7 @@ pub struct CompileDiag {
 /// Build this **once** with [`render_fragments`] before starting the
 /// per-file compilation loop.  Pass a reference to every [`compile_body`]
 /// call so that fragment parsing is never repeated across files.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RenderedFragments {
     /// Fragment id → trimmed content, ready to interpolate.
     pub rendered: HashMap<String, String>,
@@ -73,6 +80,8 @@ pub struct BodyCompileInput<'a> {
     pub known_files: &'a HashSet<String>,
     /// Known commands on `PATH` for `cmd::` validation (empty set = skip).
     pub known_commands: &'a HashSet<String>,
+    /// Known agents for `agent::` validation (empty set = skip).
+    pub known_agents: &'a HashSet<String>,
     /// Tiktoken encoding name (e.g. `"cl100k_base"`).
     pub tokenizer: &'a str,
 }
@@ -297,8 +306,22 @@ fn emit_ref(
             out.push('`');
         }
 
-        // agent::, path::, url:: — pass the value through as a backtick span.
-        RefKind::Agent | RefKind::Path | RefKind::Url => {
+        RefKind::Agent => {
+            if !input.known_agents.is_empty() && !input.known_agents.contains(value) {
+                diagnostics.push(CompileDiag {
+                    severity: DiagSeverity::Error,
+                    message: format!("agent '{}' not found in workspace", value),
+                    line,
+                    col,
+                });
+            }
+            out.push('`');
+            out.push_str(value);
+            out.push('`');
+        }
+
+        // path::, url:: — pass the value through as a backtick span.
+        RefKind::Path | RefKind::Url => {
             out.push('`');
             out.push_str(value);
             out.push('`');
@@ -344,6 +367,353 @@ fn offset_to_line_col(src: &str, offset: usize) -> (u32, u32) {
     (line, col)
 }
 
+// ── Build-level diagnostic types ──────────────────────────────────────────────
+
+/// Severity of a build-level diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildSeverity {
+    /// Build succeeds but the issue should be addressed.
+    Warning,
+    /// Build will fail.
+    Error,
+}
+
+/// A fully-resolved diagnostic with artifact name and file-level location.
+#[derive(Debug, Clone)]
+pub struct BuildDiagnostic {
+    /// Severity level.
+    pub severity: BuildSeverity,
+    /// Artifact name (skill or agent directory name).
+    pub artifact: String,
+    /// Human-readable description of the problem.
+    pub message: String,
+    /// Path to the source file.
+    pub path: String,
+    /// 1-based line number in the source file.
+    pub line: u32,
+    /// 1-based column number in the source file.
+    pub col: u32,
+}
+
+impl BuildDiagnostic {
+    /// Formats the diagnostic as a human-readable text line.
+    pub fn render_text(&self) -> String {
+        let tag = match self.severity {
+            BuildSeverity::Warning => "warning",
+            BuildSeverity::Error => "error",
+        };
+        format!(
+            "[{tag}] {} {} ({}:{}:{})",
+            self.artifact, self.message, self.path, self.line, self.col
+        )
+    }
+}
+
+/// Error returned when a `.pan` compilation produces one or more errors.
+#[derive(Debug)]
+pub struct BuildFailure {
+    /// All error-severity diagnostics from the failed compilation.
+    pub diagnostics: Vec<BuildDiagnostic>,
+}
+
+impl BuildFailure {
+    /// Formats all diagnostics as newline-separated text.
+    pub fn render_text(&self) -> String {
+        self.diagnostics
+            .iter()
+            .map(BuildDiagnostic::render_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+impl fmt::Display for BuildFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render_text())
+    }
+}
+
+impl std::error::Error for BuildFailure {}
+
+// ── CompileContext and CompileOutput ───────────────────────────────────────────
+
+/// All inputs needed to compile a single `.pan` source file.
+///
+/// Construct a [`RenderedFragments`] once per workspace via [`render_fragments`]
+/// and share it across all `CompileContext` instances in the build loop.
+pub struct CompileContext<'a> {
+    /// Parsed source — holds the raw text and optional path.
+    pub source: PanSource,
+    /// Directory/identifier name; must match the `name:` field in frontmatter.
+    pub artifact_name: String,
+    /// Fragment table pre-rendered for the whole workspace.
+    pub fragments: &'a RenderedFragments,
+    /// Workspace `[vars]` substitutions.
+    pub vars: &'a BTreeMap<String, String>,
+    /// Declared `[env]` variables with defaults.
+    pub env: &'a BTreeMap<String, EnvVar>,
+    /// Known skill names — empty set skips `skill::` validation.
+    pub known_skills: &'a HashSet<String>,
+    /// Known relative file paths — empty set skips `ref::` validation.
+    pub known_files: &'a HashSet<String>,
+    /// Known commands on PATH — empty set skips `cmd::` validation.
+    pub known_commands: &'a HashSet<String>,
+    /// Known agent names — empty set skips `agent::` validation.
+    pub known_agents: &'a HashSet<String>,
+    /// Tiktoken encoding name (e.g. `"cl100k_base"`).
+    pub tokenizer: &'a str,
+}
+
+/// Output of a successful [`compile_pan`] call.
+pub struct CompileOutput {
+    /// Fully assembled output (frontmatter + compiled body).
+    pub output: String,
+    /// Fragment ids spliced in during compilation, in first-use order.
+    pub fragments_used: Vec<String>,
+    /// Structured refs extracted from the compiled output.
+    pub refs: ArtefactRefs,
+    /// Token count over the name + description (discovery surface).
+    pub discovery_tokens: u32,
+    /// Token count over the full compiled output (activation cost).
+    pub activation_tokens: u32,
+    /// `ref::` path values found in the source (for transitive cost calculation).
+    pub ref_paths: Vec<String>,
+    /// Warnings produced during compilation (cmd not on PATH, etc.).
+    pub cmd_warnings: Vec<BuildDiagnostic>,
+}
+
+// ── compile_pan ────────────────────────────────────────────────────────────────
+
+/// Compiles a full `.pan` source (frontmatter + body) into a compiled artifact.
+///
+/// Returns [`Err(BuildFailure)`] when compilation produces one or more errors.
+/// Warnings are returned inside [`CompileOutput::cmd_warnings`].
+pub fn compile_pan(ctx: &CompileContext<'_>) -> Result<CompileOutput, BuildFailure> {
+    let src = ctx.source.as_str();
+    let path = path_str(&ctx.source);
+
+    let (frontmatter, name, body, body_start_line) =
+        parse_source(src).map_err(|e| BuildFailure {
+            diagnostics: vec![BuildDiagnostic {
+                severity: BuildSeverity::Error,
+                artifact: ctx.artifact_name.clone(),
+                message: e.to_string(),
+                path: path.clone(),
+                line: 1,
+                col: 1,
+            }],
+        })?;
+
+    if name != ctx.artifact_name {
+        return Err(BuildFailure {
+            diagnostics: vec![BuildDiagnostic {
+                severity: BuildSeverity::Error,
+                artifact: ctx.artifact_name.clone(),
+                message: format!(
+                    "frontmatter name '{}' does not match artifact directory '{}'",
+                    name, ctx.artifact_name
+                ),
+                path,
+                line: 1,
+                col: 1,
+            }],
+        });
+    }
+
+    let body = normalize_legacy_fragments(&body);
+    let compiled = compile_body(&BodyCompileInput {
+        body: &body,
+        skill_name: &ctx.artifact_name,
+        fragments: ctx.fragments,
+        vars: ctx.vars,
+        env: ctx.env,
+        known_skills: ctx.known_skills,
+        known_files: ctx.known_files,
+        known_commands: ctx.known_commands,
+        known_agents: ctx.known_agents,
+        tokenizer: ctx.tokenizer,
+    });
+
+    let mut cmd_warnings: Vec<BuildDiagnostic> = Vec::new();
+    let mut errors: Vec<BuildDiagnostic> = Vec::new();
+    for diag in &compiled.diagnostics {
+        let mapped = map_diag(diag, &ctx.artifact_name, &path, body_start_line);
+        match mapped.severity {
+            BuildSeverity::Warning => cmd_warnings.push(mapped),
+            BuildSeverity::Error => errors.push(mapped),
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(BuildFailure {
+            diagnostics: errors,
+        });
+    }
+
+    let output = format!("---\n{}\n---\n\n{}", frontmatter, compiled.text);
+    let refs = collect_structured_refs(&output);
+
+    let discovery_text = match crate::parse::parse_frontmatter(&output) {
+        Ok(Some(fm)) => format!(
+            "{} {}",
+            fm.name.unwrap_or_default(),
+            fm.description.unwrap_or_default()
+        ),
+        _ => String::new(),
+    };
+
+    let discovery_tokens = crate::tokens::count_tokens(&discovery_text, ctx.tokenizer);
+    let activation_tokens = compiled.tokens;
+    let ref_paths = crate::refs::extract_path_refs(ctx.source.as_str());
+
+    Ok(CompileOutput {
+        output,
+        fragments_used: compiled.fragments_used,
+        refs,
+        discovery_tokens,
+        activation_tokens,
+        ref_paths,
+        cmd_warnings,
+    })
+}
+
+// ── compile_pan helpers ────────────────────────────────────────────────────────
+
+static LEGACY_FRAGMENT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^\{\{>\s*([\w-]+)\s*\}\}\s*$").expect("valid fragment regex")
+});
+
+#[derive(Deserialize)]
+struct PanFrontmatter {
+    name: String,
+}
+
+fn parse_source(source: &str) -> anyhow::Result<(String, String, String, u32)> {
+    let matter = Matter::<YAML>::new();
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let parsed = matter
+        .parse::<PanFrontmatter>(source)
+        .context("failed to parse source")?;
+    let fm = parsed
+        .data
+        .ok_or_else(|| anyhow::anyhow!("source has no YAML frontmatter"))?;
+    let body_start_line = find_body_start_line(source, &parsed.content);
+    Ok((parsed.matter, fm.name, parsed.content, body_start_line))
+}
+
+fn find_body_start_line(source: &str, body: &str) -> u32 {
+    let body_offset = find_body_offset(source);
+    let content_offset = if body.is_empty() {
+        body_offset
+    } else {
+        source[body_offset..]
+            .find(body)
+            .map(|o| body_offset + o)
+            .unwrap_or(body_offset)
+    };
+    (source[..content_offset]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count()
+        + 1) as u32
+}
+
+fn find_body_offset(source: &str) -> usize {
+    let mut offset = 0;
+    let mut line_no = 0;
+    for line in source.split_inclusive('\n') {
+        line_no += 1;
+        offset += line.len();
+        if line_no > 1 && line.trim_end_matches(['\r', '\n']) == "---" {
+            return offset;
+        }
+    }
+    0
+}
+
+fn normalize_legacy_fragments(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            LEGACY_FRAGMENT_RE
+                .captures(line)
+                .map(|caps| format!("{{> {} <}}", &caps[1]))
+                .unwrap_or_else(|| line.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn map_diag(
+    diag: &CompileDiag,
+    artifact: &str,
+    path: &str,
+    body_start_line: u32,
+) -> BuildDiagnostic {
+    let severity = match diag.severity {
+        DiagSeverity::Warning => BuildSeverity::Warning,
+        DiagSeverity::Error => BuildSeverity::Error,
+    };
+    BuildDiagnostic {
+        severity,
+        artifact: artifact.to_string(),
+        message: diag.message.clone(),
+        path: path.to_string(),
+        line: body_start_line + diag.line - 1,
+        col: diag.col,
+    }
+}
+
+fn collect_structured_refs(text: &str) -> ArtefactRefs {
+    use crate::refs::{extract_markdown_links, typed_refs, RefKind as LintRefKind};
+
+    let mut paths: Vec<String> = Vec::new();
+    let mut commands: Vec<String> = Vec::new();
+    let mut skills: Vec<String> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
+
+    for tr in typed_refs(text) {
+        match tr.kind {
+            LintRefKind::Ref => paths.push(tr.value),
+            LintRefKind::Cmd => commands.push(tr.value),
+            LintRefKind::Skill => skills.push(tr.value),
+            LintRefKind::Var | LintRefKind::Env => {}
+        }
+    }
+
+    for link in extract_markdown_links(text) {
+        if link.is_url {
+            urls.push(link.target);
+        } else {
+            paths.push(link.target);
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    commands.sort();
+    commands.dedup();
+    skills.sort();
+    skills.dedup();
+    urls.sort();
+    urls.dedup();
+
+    ArtefactRefs {
+        paths,
+        commands,
+        skills,
+        urls,
+        agents: Vec::new(),
+    }
+}
+
+fn path_str(source: &PanSource) -> String {
+    source
+        .path
+        .as_deref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -368,6 +738,7 @@ mod tests {
             known_skills,
             known_files,
             known_commands,
+            known_agents: no_set(),
             tokenizer: &cfg.build.tokenizer,
         }
     }
@@ -756,6 +1127,63 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.severity == DiagSeverity::Warning));
+    }
+
+    #[test]
+    fn missing_agent_ref_produces_error_when_known_agents_nonempty() {
+        let cfg = SkilletConfig::default();
+        let frags = render_fragments(&HashMap::new());
+        let mut known_agents = HashSet::new();
+        known_agents.insert("real-agent".to_string());
+        let input = BodyCompileInput {
+            known_agents: &known_agents,
+            ..default_input(
+                "`agent::ghost-agent`",
+                &frags,
+                &cfg,
+                no_set(),
+                no_set(),
+                no_set(),
+            )
+        };
+        let out = compile_body(&input);
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == DiagSeverity::Error));
+    }
+
+    #[test]
+    fn compile_pan_surfaces_missing_agent_when_known_agents_nonempty() {
+        let cfg = SkilletConfig::default();
+        let frags = render_fragments(&HashMap::new());
+        let known_skills = HashSet::new();
+        let known_files = HashSet::new();
+        let known_commands = HashSet::new();
+        let mut known_agents = HashSet::new();
+        known_agents.insert("real-agent".to_string());
+
+        let src = "---\nname: test-skill\ndescription: test\n---\n\n`agent::ghost-agent`";
+        let ctx = CompileContext {
+            source: PanSource::new(src.to_string(), None),
+            artifact_name: "test-skill".to_string(),
+            fragments: &frags,
+            vars: &cfg.vars,
+            env: &cfg.env,
+            known_skills: &known_skills,
+            known_files: &known_files,
+            known_commands: &known_commands,
+            known_agents: &known_agents,
+            tokenizer: &cfg.build.tokenizer,
+        };
+
+        let err = match compile_pan(&ctx) {
+            Ok(_) => panic!("expected missing agent to fail compilation"),
+            Err(err) => err,
+        };
+        assert!(err.diagnostics.iter().any(|d| d
+            .message
+            .contains("agent 'ghost-agent' not found in workspace")));
     }
 
     // ── escaped body ──────────────────────────────────────────────────────────

@@ -8,6 +8,11 @@ pub mod compile;
 pub mod lex;
 pub mod parse;
 
+pub use compile::{
+    compile_pan, render_fragments, BuildDiagnostic, BuildFailure, BuildSeverity, CompileContext,
+    CompileOutput, RenderedFragments,
+};
+
 use std::path::{Path, PathBuf};
 
 /// A 1-based line/column location within a source string.
