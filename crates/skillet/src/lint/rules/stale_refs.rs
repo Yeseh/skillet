@@ -31,7 +31,7 @@ pub fn check(source: &SourceFile, config: &SkilletConfig, ctx: &LintContext) -> 
             RefKind::Ref => {}
             RefKind::Cmd => {
                 let cmd = tr.value.split_whitespace().next().unwrap_or(&tr.value);
-                let allowed = config.lint.allowed_commands.iter().any(|c| c == cmd);
+                let allowed = config.allowed_commands.iter().any(|c| c == cmd);
                 if !allowed && !ctx.known_commands.contains(cmd) {
                     diags.push(diag_located(
                         Severity::Warning,

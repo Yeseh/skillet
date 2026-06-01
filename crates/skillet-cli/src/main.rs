@@ -122,7 +122,7 @@ fn main() -> Result<()> {
             let cwd = std::env::current_dir()?;
             let cfg = config::load(&cwd)?;
             let json = matches!(format, Some(FormatArg::Json));
-            let skills_src_dir = cwd.join(&cfg.workspace.skills_src_dir);
+            let skills_src_dir = cwd.join(&cfg.workspace.src_dir);
             new::run(&skills_src_dir, &name, json)?;
         }
         Commands::Build {
@@ -141,7 +141,7 @@ fn main() -> Result<()> {
             if let Err(err) = build::run(&cwd, name.as_deref(), &opts, &cfg) {
                 if fmt == build::OutputFormat::Text {
                     if let Some(build_failure) =
-                        err.downcast_ref::<skillet::compiler::BuildFailure>()
+                        err.downcast_ref::<skillet::compiler::CompleError>()
                     {
                         eprintln!("{}", build_failure.render_text());
                         std::process::exit(1);

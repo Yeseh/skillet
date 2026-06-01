@@ -125,7 +125,7 @@ fn compute_row_from_disk(
     lockfile: &lockfile::Lockfile,
     tokenizer: &str,
 ) -> Result<BudgetRow> {
-    let skill_md_path = skill.skill_out_dir.join("SKILL.md");
+    let skill_md_path = skill.target_dir.join("SKILL.md");
     let compiled = std::fs::read_to_string(&skill_md_path).with_context(|| {
         format!(
             "SKILL.md not found for '{}' — run `skillet build` first",
@@ -149,7 +149,7 @@ fn compute_row_from_disk(
     let ref_tokens: u32 = extract_path_refs(&source_text)
         .into_iter()
         .filter_map(|rel| {
-            let path = skill.skill_dir.join(&rel);
+            let path = skill.src_dir.join(&rel);
             std::fs::read_to_string(&path)
                 .ok()
                 .map(|t| count_tokens(&t, tokenizer))

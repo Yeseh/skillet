@@ -1,16 +1,16 @@
 //! Configuration types for `skillet.toml`.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// Directory layout for the skillet workspace.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// Path (relative to the project root) where skill source `.pan` files are stored.
-    pub skills_src_dir: String,
-    /// Path (relative to the project root) where compiled `SKILL.md` outputs are written.
-    pub skills_out_dir: String,
+    /// Path (relative to the project root) where source `.pan` files are stored.
+    pub src_dir: String,
+    /// Path (relative to the project root) where compiled outputs are written.
+    pub out_dir: String,
     /// Path where skill fragment `.fragment.pan` files are stored.
     pub fragments_dir: String,
 }
@@ -25,9 +25,6 @@ pub struct LintConfig {
     pub max_discovery_tokens: u32,
     /// Maximum token budget for a single skill fragment.
     pub max_fragment_tokens: u32,
-    /// Shell commands that skills are permitted to invoke (e.g. `"docker"`, `"kubectl"`).
-    #[serde(default)]
-    pub allowed_commands: Vec<String>,
     /// Rule IDs to silence (e.g. `"lint-missing-docs"`).  Empty by default.
     #[serde(default)]
     pub disable: Vec<String>,
@@ -62,44 +59,33 @@ pub struct SkilletConfig {
     pub lint: LintConfig,
     /// Build configuration.
     pub build: BuildConfig,
+
     /// Freeform template variables available inside skill templates.
     #[serde(default)]
     pub vars: BTreeMap<String, String>,
     /// Environment variables with their default values.
     #[serde(default)]
     pub env: BTreeMap<String, EnvVar>,
+    /// The allowed commands
+    #[serde(default)]
+    pub allowed_commands: HashSet<String>
 }
 
 impl Default for SkilletConfig {
     fn default() -> Self {
-        let mut vars = BTreeMap::new();
-        vars.insert("project_name".to_string(), "my-project".to_string());
-
-        let mut env = BTreeMap::new();
-        env.insert(
-            "CI".to_string(),
-            EnvVar {
-                default: "false".to_string(),
-            },
-        );
-        env.insert(
-            "TEAM_NAME".to_string(),
-            EnvVar {
-                default: "engineering".to_string(),
-            },
-        );
+        let vars = BTreeMap::new();
+        let env = BTreeMap::new();
 
         SkilletConfig {
             workspace: WorkspaceConfig {
-                skills_src_dir: "src/skills".to_string(),
-                skills_out_dir: "skills".to_string(),
+                src_dir: "src/skills".to_string(),
+                out_dir: "skills".to_string(),
                 fragments_dir: "src/skills/_fragments".to_string(),
             },
             lint: LintConfig {
                 max_activation_tokens: 4000,
                 max_discovery_tokens: 100,
                 max_fragment_tokens: 500,
-                allowed_commands: vec![],
                 disable: vec![],
             },
             build: BuildConfig {
@@ -108,6 +94,7 @@ impl Default for SkilletConfig {
             },
             vars,
             env,
+            allowed_commands: HashSet::default()
         }
     }
 }
@@ -129,8 +116,8 @@ mod tests {
         let cfg = SkilletConfig::default();
 
         // Assert
-        assert_eq!(cfg.workspace.skills_src_dir, "src/skills");
-        assert_eq!(cfg.workspace.skills_out_dir, "skills");
+        assert_eq!(cfg.workspace.src_dir, "src/skills");
+        assert_eq!(cfg.workspace.out_dir, "skills");
         assert_eq!(cfg.workspace.fragments_dir, "src/skills/_fragments");
     }
 

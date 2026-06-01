@@ -101,7 +101,7 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
                         }
                     }
 
-                    let skill_md = skill.skill_out_dir.join("SKILL.md");
+                    let skill_md = skill.target_dir.join("SKILL.md");
                     if !skill_md.exists() {
                         reasons.push("SKILL.md is missing — run `skillet build`".to_string());
                         diffs.push(DiffEntry {

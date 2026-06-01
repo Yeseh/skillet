@@ -61,11 +61,13 @@ pub struct BuildReport {
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 pub fn run(
     workspace_path: &Path,
-    skill_name: Option<&str>,
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
+
     let ws = Workspace::resolve(workspace_path, cfg)?;
+
+    // TODO create single artefact type, so we can iterate and compile everything
 
     let targets: Vec<&Skill> = match skill_name {
         Some(name) => {
@@ -90,7 +92,7 @@ pub fn run(
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
-            let skills_src_dir = workspace_path.join(&cfg.workspace.skills_src_dir);
+            let skills_src_dir = workspace_path.join(&cfg.workspace.src_dir);
             eprintln!("no skills found in {}", skills_src_dir.display());
         }
         return Ok(());
@@ -121,10 +123,7 @@ pub fn run(
         compile_one_skill(
             skill,
             cfg,
-            workspace_path,
             &ws,
-            &known_skills,
-            &known_agents,
             &mut lockfile,
         )?;
         if opts.format != OutputFormat::Json {
@@ -162,57 +161,55 @@ pub fn run(
 fn compile_one_skill(
     skill: &Skill,
     cfg: &SkilletConfig,
-    workspace_path: &Path,
     ws: &Workspace,
-    known_skills: &HashSet<String>,
-    known_agents: &HashSet<String>,
     lockfile: &mut Lockfile,
 ) -> Result<()> {
     let source_content = std::fs::read_to_string(&skill.source_path)
         .with_context(|| format!("failed to read {}", skill.source_path.display()))?;
 
-    let known_files = ws.skill_files(skill);
+    let known_references = ws.get_references_for_skill(skill);
 
     // Build diagnostic path using workspace + relative path with forward slashes.
     // This matches the PathBuf::join("src/skills/…") pattern used in tests, ensuring
     // consistent separator characters across OS (Windows preserves '/' in single-arg joins).
-    let pan_path = workspace_path.join(format!(
+    let pan_path = ws.root.join(format!(
         "{}/{}/{}.pan",
-        cfg.workspace.skills_src_dir.trim_end_matches('/'),
+        cfg.workspace.src_dir.trim_end_matches('/'),
         skill.name,
         skill.name
     ));
-    let pan_source = PanSource::new(source_content, Some(pan_path));
+
+    let pan_source = PanSource::new(
+        source_content, 
+        Some(pan_path));
+
     let ctx = CompileContext {
         source: pan_source,
         artifact_name: skill.name.clone(),
-        fragments: &ws.rendered_fragments,
+        fragments: &ws.fragments,
         vars: &cfg.vars,
         env: &cfg.env,
-        known_files: &known_files,
+        known_references: &known_references,
         known_skills,
-        known_commands: &ws.known_commands,
         known_agents,
         tokenizer: &cfg.build.tokenizer,
     };
 
     let result = compile_pan(&ctx)?;
 
-    for w in &result.cmd_warnings {
+    for w in &result.diagnostics {
         eprintln!("{}", w.render_text());
     }
 
-    std::fs::create_dir_all(&skill.skill_out_dir).with_context(|| {
+    std::fs::create_dir_all(&skill.target_dir).with_context(|| {
         format!(
             "failed to create output directory {}",
-            skill.skill_out_dir.display()
+            skill.target_dir.display()
         )
     })?;
-    let output_path = skill.skill_out_dir.join("SKILL.md");
+    let output_path = skill.target_dir.join("SKILL.md");
     std::fs::write(&output_path, &result.output)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
-
-    copy_skill_subfolders(&skill.skill_dir, &skill.skill_out_dir)?;
 
     let source_hash = hash_file(&skill.source_path)?;
     let compiled_hash = hash_bytes(result.output.as_bytes());
@@ -228,7 +225,7 @@ fn compile_one_skill(
         .ref_paths
         .iter()
         .filter_map(|rel| {
-            let path = skill.skill_dir.join(rel);
+            let path = skill.src_dir.join(rel);
             std::fs::read_to_string(&path)
                 .ok()
                 .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
@@ -289,31 +286,6 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<(
         frag_entry.used_by.sort();
     }
 
-    Ok(())
-}
-
-fn copy_skill_subfolders(skill_dir: &Path, skill_out_dir: &Path) -> Result<()> {
-    for entry in WalkDir::new(skill_dir)
-        .min_depth(1)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let sub_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-        let dest_sub_dir = skill_out_dir.join(&sub_name);
-        if sub_name == "reference" {
-            build_reference_dir(path, &dest_sub_dir)?;
-        } else {
-            skillet::workspace::copy_dir_recursive(path, &dest_sub_dir)?;
-        }
-    }
     Ok(())
 }
 

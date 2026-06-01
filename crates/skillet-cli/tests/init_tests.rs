@@ -6,8 +6,8 @@ use tempfile::TempDir;
 fn setup_workspace(tmp: &std::path::Path) {
     let cfg = skillet::config::SkilletConfig::default();
     fs::write(tmp.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
-    fs::create_dir_all(tmp.join(&cfg.workspace.skills_src_dir)).unwrap();
-    fs::create_dir_all(tmp.join(&cfg.workspace.skills_out_dir)).unwrap();
+    fs::create_dir_all(tmp.join(&cfg.workspace.src_dir)).unwrap();
+    fs::create_dir_all(tmp.join(&cfg.workspace.out_dir)).unwrap();
     fs::create_dir_all(tmp.join(&cfg.workspace.fragments_dir)).unwrap();
 }
 

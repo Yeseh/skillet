@@ -5,7 +5,7 @@
 //! eliminating redundant file I/O inside individual rule implementations.
 
 use crate::parse::SkillFrontmatter;
-use crate::refs::{ParsedRefs, RefKind};
+use crate::refs::{ParsedRefs};
 use crate::tokens::count_tokens;
 use rayon::prelude::*;
 use sha2::Digest;
@@ -125,6 +125,7 @@ pub struct SourceInput {
     pub reference_docs: Vec<(PathBuf, String)>,
 }
 
+
 /// Phase 1 — scans all pre-loaded skill sources in parallel via
 /// `rayon::par_iter`.
 ///
@@ -215,108 +216,12 @@ fn scan_content(
     }
 }
 
-// ── Phase 2: Parallel ref extraction ──────────────────────────────────────────
-
-/// Phase 2 — extracts refs from all source files in parallel via
-/// `rayon::par_iter`.
-///
-/// Takes ownership of `source_files`, populates `parsed_refs` on each entry,
-/// and returns the updated files plus a flat workspace-wide [`AllRefs`].
-pub fn extract_refs(
-    mut source_files: Vec<SourceFile>,
-    skill_names: &[&str],
-) -> (Vec<SourceFile>, AllRefs) {
-    // Parallel ref extraction — one ParsedRefs per file.
-    let extracted: Vec<ParsedRefs> = source_files
-        .par_iter()
-        .map(|sf| {
-            if sf.parse_errors.is_empty() && !sf.raw.is_empty() {
-                ParsedRefs::extract(&sf.raw, skill_names)
-            } else {
-                ParsedRefs::default()
-            }
-        })
-        .collect();
-
-    // Assign back (sequential pass).
-    for (sf, parsed) in source_files.iter_mut().zip(extracted) {
-        sf.parsed_refs = parsed;
-    }
-
-    let all_refs = build_all_refs(&source_files);
-    (source_files, all_refs)
-}
-
-/// Flattens per-file `parsed_refs` into a workspace-wide [`AllRefs`].
-fn build_all_refs(source_files: &[SourceFile]) -> AllRefs {
-    let mut all_refs = AllRefs::new();
-    for sf in source_files {
-        let file_id = sf.id;
-        for tr in &sf.parsed_refs.typed {
-            let r = match tr.kind {
-                RefKind::Ref => Ref::PathRef {
-                    value: tr.value.clone(),
-                    file_id,
-                    line: tr.line,
-                    col: tr.col,
-                },
-                RefKind::Cmd => Ref::Cmd {
-                    value: tr.value.clone(),
-                    file_id,
-                    line: tr.line,
-                    col: tr.col,
-                },
-                RefKind::Skill => Ref::Skill {
-                    value: tr.value.clone(),
-                    file_id,
-                    line: tr.line,
-                    col: tr.col,
-                },
-                RefKind::Var => Ref::Var {
-                    value: tr.value.clone(),
-                    file_id,
-                    line: tr.line,
-                    col: tr.col,
-                },
-                RefKind::Env => Ref::Env {
-                    value: tr.value.clone(),
-                    file_id,
-                    line: tr.line,
-                    col: tr.col,
-                },
-            };
-            all_refs.push(r);
-        }
-        for link in &sf.parsed_refs.links {
-            if !link.is_url {
-                all_refs.push(Ref::PathRef {
-                    value: link.target.clone(),
-                    file_id,
-                    line: link.line,
-                    col: link.col,
-                });
-            }
-        }
-        for u in &sf.parsed_refs.untyped {
-            all_refs.push(Ref::Untyped {
-                value: u.content.clone(),
-                inferred_kind: u.inferred_kind,
-                file_id,
-                line: u.line,
-                col: u.col,
-            });
-        }
-    }
-    all_refs
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn make_input(tmp: &TempDir, name: &str, content: &str) -> SourceInput {
@@ -394,23 +299,5 @@ mod tests {
         let ids: Vec<usize> = files.iter().map(|sf| sf.id).collect();
         assert!(ids.contains(&0));
         assert!(ids.contains(&1));
-    }
-
-    #[test]
-    fn extract_refs_populates_typed_refs() {
-        let tmp = TempDir::new().unwrap();
-        let input = make_input(
-            &tmp,
-            "delta",
-            "---\nname: delta\ndescription: x\n---\n\nSee `ref::helper.sh`\n",
-        );
-        let files = scan_sources(&[input], "cl100k_base");
-        let (files, all_refs) = extract_refs(files, &["delta"]);
-        assert!(!files[0].parsed_refs.typed.is_empty());
-        let path_refs: Vec<_> = all_refs
-            .iter()
-            .filter(|r| matches!(r, Ref::PathRef { .. }))
-            .collect();
-        assert!(!path_refs.is_empty());
     }
 }

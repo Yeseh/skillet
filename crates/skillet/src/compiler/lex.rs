@@ -39,6 +39,14 @@ pub enum TokenKind {
     RefVar,
     /// An `env::` prefix.
     RefEnv,
+    /// The opening `[` of a markdown link or bracket expression.
+    BracketOpen,
+    /// The closing `]` of a markdown link or bracket expression.
+    BracketClose,
+    /// The opening `(` of a markdown link target.
+    ParenOpen,
+    /// The closing `)` of a markdown link target.
+    ParenClose,
 }
 
 /// A single lexical token and its byte range within the source.
@@ -178,6 +186,13 @@ impl<'a> Lexer<'a> {
                         Some(self.make_body(start_pos))
                     }
                 }
+                b'[' => Some(self.make_token(TokenKind::BracketOpen, start_pos)),
+                b']' => Some(self.make_token(TokenKind::BracketClose, start_pos)),
+                b'(' => {
+                    tokens.push(self.make_token(TokenKind::ParenOpen, start_pos));
+                    Some(self.make_link_target_value(self.pos as u32))
+                }
+                b')' => Some(self.make_token(TokenKind::ParenClose, start_pos)),
                 _ => Some(self.make_body(start_pos)),
             };
 
@@ -227,10 +242,27 @@ impl<'a> Lexer<'a> {
                     self.pos -= 1;
                     break;
                 }
+                b'[' | b']' => {
+                    self.pos -= 1;
+                    break;
+                }
                 _ => {}
             }
         }
         self.make_token(TokenKind::BodyText, start_pos)
+    }
+
+    /// Scans a markdown link target starting at `start_pos` (just after `(`),
+    /// stopping before `)` or at a newline/EOF.  The `)` is left unconsumed
+    /// so the outer loop emits it as [`TokenKind::ParenClose`].
+    fn make_link_target_value(&mut self, start_pos: u32) -> Token {
+        while let Some(c) = self.next() {
+            if c == b')' || c == b'\n' {
+                self.pos -= 1;
+                break;
+            }
+        }
+        self.make_token(TokenKind::RefValue, start_pos)
     }
 }
 

@@ -11,6 +11,3 @@ pub mod parse;
 pub mod refs;
 pub mod tokens;
 pub mod workspace;
-
-#[cfg(test)]
-pub(crate) mod test_support;

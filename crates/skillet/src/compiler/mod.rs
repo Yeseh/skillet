@@ -8,12 +8,31 @@ pub mod compile;
 pub mod lex;
 pub mod parse;
 
-pub use compile::{
-    compile_pan, render_fragments, BuildDiagnostic, BuildFailure, BuildSeverity, CompileContext,
-    CompileOutput, RenderedFragments,
-};
+use std::path::{Path};
 
-use std::path::{Path, PathBuf};
+use crate::workspace::artefact::Artefact;
+
+/// Severity of a compile-time diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagSeverity {
+    /// Build will fail.
+    Error,
+    /// Build succeeds but the issue should be addressed.
+    Warning,
+}
+
+/// A diagnostic produced by [`compile_body`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileDiag {
+    /// Severity level.
+    pub severity: DiagSeverity,
+    /// Human-readable description of the problem.
+    pub message: String,
+    /// 1-based line number in the body text.
+    pub line: u32,
+    /// 1-based column number in the body text.
+    pub col: u32,
+}
 
 /// A 1-based line/column location within a source string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,8 +47,6 @@ pub struct SourceLocation {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PanSource {
-    /// Absolute path to the source file, when known.
-    pub path: Option<PathBuf>,
     /// Original source content.
     pub src: Box<str>,
     /// Byte offsets of the first character of each line.
@@ -39,7 +56,7 @@ pub struct PanSource {
 impl PanSource {
     /// Creates a new source wrapper from raw text and an optional path.
     #[must_use]
-    pub fn new(src: String, path: Option<PathBuf>) -> Self {
+    pub fn new(src: String) -> Self {
         let mut offsets: Vec<u32> = vec![0];
         let mut found_line_starts: Vec<u32> = src
             .char_indices()
@@ -50,10 +67,13 @@ impl PanSource {
         offsets.append(&mut found_line_starts);
 
         Self {
-            path,
             src: src.into_boxed_str(),
             offsets,
         }
+    }
+
+    pub fn from_artefact(artefact: Artefact) -> std::io::Result<Self> {
+        Self::from_path(artefact.source_path)
     }
 
     /// Loads a source file from disk.
@@ -63,7 +83,7 @@ impl PanSource {
     /// Returns any I/O error from reading the file.
     pub fn from_path(path: &Path) -> std::io::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        Ok(Self::new(content, Some(path.to_path_buf())))
+        Ok(Self::new(content))
     }
 
     /// Returns the original source text.
@@ -92,7 +112,7 @@ mod tests {
 
     #[test]
     fn single_line_keeps_only_zero_offset() {
-        let ps = PanSource::new("Hello World".to_string(), None);
+        let ps = PanSource::new("Hello World".to_string());
 
         assert_eq!(Some(0), ps.offsets.first().copied());
         assert_eq!(ps.offsets.len(), 1);
@@ -100,7 +120,7 @@ mod tests {
 
     #[test]
     fn multi_line_records_each_line_start() {
-        let ps = PanSource::new("Hello\nWorld".to_string(), None);
+        let ps = PanSource::new("Hello\nWorld".to_string());
 
         let mut iter = ps.offsets.iter();
         assert_eq!(Some(0), iter.next().copied());
@@ -109,7 +129,7 @@ mod tests {
 
     #[test]
     fn location_at_reports_line_and_column() {
-        let ps = PanSource::new("Hello\nWorld".to_string(), None);
+        let ps = PanSource::new("Hello\nWorld".to_string());
 
         let loc = ps.location_at(9);
         assert_eq!(2, loc.line);
@@ -118,7 +138,7 @@ mod tests {
 
     #[test]
     fn location_at_handles_line_boundary() {
-        let ps = PanSource::new("Hello\nWorld".to_string(), None);
+        let ps = PanSource::new("Hello\nWorld".to_string());
 
         let loc = ps.location_at(5);
         assert_eq!(1, loc.line);

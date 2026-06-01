@@ -7,17 +7,6 @@
 use gray_matter::{engine::YAML, Matter};
 use serde::Deserialize;
 
-/// The YAML frontmatter of a `.pan` skill source file.
-///
-/// All fields are `Option` so callers can report missing-field errors rather
-/// than receiving a parse failure from the deserializer.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SkillFrontmatter {
-    /// Skill identifier — must match the containing directory name.
-    pub name: Option<String>,
-    /// Short description shown in discovery-token reporting.
-    pub description: Option<String>,
-}
 
 /// Parses the YAML frontmatter of a `.pan` source string.
 ///

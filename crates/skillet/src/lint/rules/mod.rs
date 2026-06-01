@@ -3,7 +3,6 @@ pub use super::{diag, diag_located, Diagnostic, Severity};
 
 pub mod duplication;
 pub mod invalid_frontmatter;
-pub mod markdown_links;
 pub mod oversized;
 pub mod stale_build;
 pub mod stale_refs;

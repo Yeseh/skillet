@@ -146,7 +146,7 @@ fn build_lint_context(ws: &Workspace, config: &SkilletConfig) -> Result<LintCont
 
     // Skill files and known dirs from the resolved workspace.
     for skill in &ws.skills {
-        let files = ws.skill_files(skill);
+        let files = ws.get_references_for_skill(skill);
         ctx.skill_files.insert(skill.name.clone(), files);
         ctx.known_skill_dirs.insert(skill.name.clone());
     }
@@ -156,7 +156,7 @@ fn build_lint_context(ws: &Workspace, config: &SkilletConfig) -> Result<LintCont
 
     // Compiled SKILL.md hashes and texts.
     for skill in &ws.skills {
-        let path = skill.skill_out_dir.join("SKILL.md");
+        let path = skill.target_dir.join("SKILL.md");
         if let Ok(text) = std::fs::read_to_string(&path) {
             let hash = format!(
                 "sha256:{}",
@@ -190,7 +190,7 @@ fn build_source_input(skill: &Skill) -> pipeline::SourceInput {
     let content = std::fs::read_to_string(&skill.source_path).unwrap_or_default();
 
     let mut reference_docs = Vec::new();
-    let ref_dir = skill.skill_dir.join("reference");
+    let ref_dir = skill.src_dir.join("reference");
     if ref_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&ref_dir) {
             for entry in entries.flatten() {
@@ -207,8 +207,8 @@ fn build_source_input(skill: &Skill) -> pipeline::SourceInput {
     pipeline::SourceInput {
         name: skill.name.clone(),
         source_path: skill.source_path.clone(),
-        skill_dir: skill.skill_dir.clone(),
-        skill_out_dir: skill.skill_out_dir.clone(),
+        skill_dir: skill.src_dir.clone(),
+        skill_out_dir: skill.target_dir.clone(),
         content,
         reference_docs,
     }
