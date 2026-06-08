@@ -302,38 +302,6 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<(
     Ok(())
 }
 
-fn build_reference_dir(src: &Path, dest: &Path) -> Result<()> {
-    for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let rel = path.strip_prefix(src).unwrap();
-        if rel == std::path::Path::new("") {
-            continue;
-        }
-        if path.is_dir() {
-            std::fs::create_dir_all(dest.join(rel))
-                .with_context(|| format!("failed to create {}", dest.join(rel).display()))?;
-        } else {
-            let dest_file = if path.extension().and_then(|e| e.to_str()) == Some("pan") {
-                dest.join(rel.with_extension("md"))
-            } else {
-                dest.join(rel)
-            };
-            if let Some(parent) = dest_file.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create {}", parent.display()))?;
-            }
-            std::fs::copy(path, &dest_file).with_context(|| {
-                format!(
-                    "failed to copy {} to {}",
-                    path.display(),
-                    dest_file.display()
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-
 fn verify_urls_from_lockfile(
     lockfile: &Lockfile,
     strict: bool,

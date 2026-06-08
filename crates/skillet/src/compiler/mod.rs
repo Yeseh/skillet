@@ -5,7 +5,9 @@
 //! available as `skillet::compiler`.
 
 pub mod compile;
+/// Lexer for `.pan` syntax.
 pub mod lex;
+/// Parser for `.pan` syntax.
 pub mod parse;
 
 use std::path::{Path};
@@ -50,6 +52,7 @@ impl PanSource {
         }
     }
 
+    /// Loads source content from an [`Artefact`]'s source path.
     pub fn from_artefact(artefact: Artefact) -> std::io::Result<Self> {
         Self::from_path(&artefact.source_path)
     }

@@ -36,6 +36,7 @@ pub struct Skill {
 /// Scripts are not compiled but directly copied when encountered, should be done in emite step of skill
 #[derive(Debug, Clone)]
 pub struct Script {
+    /// Script name (file stem, no extension).
     pub name: String,
     /// Path relative to the skill directory (e.g. `scripts/setup.sh`).
     pub relative_path: String,
@@ -48,6 +49,7 @@ pub struct Script {
 /// References can be .pan files or .md, should be compiled when .pan OR (.md and parse_md option is true)
 #[derive(Debug, Clone)]
 pub struct Reference {
+    /// Reference name derived from its path relative to `references/` (e.g. `api/types`).
     pub name: String,
     /// Path relative to the skill directory (e.g. `references/api/types.pan`).
     pub relative_path: String,

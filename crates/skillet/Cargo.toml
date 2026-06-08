@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Jesse Wellenberg"]
 
 [dependencies]
-toml = "1.1.2+spec-1.1.0"
+toml = "1.1.2"
 serde = { version = "1", features = ["derive"] }
 walkdir = "2"
 anyhow = "1"

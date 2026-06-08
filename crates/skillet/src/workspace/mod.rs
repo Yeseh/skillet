@@ -9,7 +9,9 @@
 //! - **Fragments** — `.fragment.pan` files under `{fragments_dir}/`
 //! 
 
+/// Artefact type definitions.
 pub mod artefact;
+/// Skill, Script, and Reference type definitions.
 pub mod skill;
 
 pub use skill::Skill;
@@ -127,10 +129,12 @@ impl Workspace {
         self.raw_fragments.keys().map(|k| k.as_str()).collect()
     }
 
+    /// Returns relative paths of all script files within a skill's `scripts/` directory.
     pub fn get_scripts_for_skill(&self, skill: &Skill) -> HashSet<String> {
         self.child_files_for_skill(skill, Some(Path::new("scripts")))
     }
 
+    /// Returns relative paths of all reference files within a skill's `references/` directory.
     pub fn get_references_for_skill(&self, skill: &Skill) -> HashSet<String> {
         self.child_files_for_skill(skill, Some(Path::new("references")))
     }
@@ -234,7 +238,7 @@ fn discover_agents(source_dir: &Path, out_dir: &Path) -> Result<Vec<Agent>> {
             Some (Agent {
                 name: filename.to_string(), 
                 source_path: path.clone(),
-                target_path: target_dir.join(format!("{}.md", filename.clone()))
+                target_path: target_dir.join(format!("{}.md", filename))
             })
         })
         .collect();

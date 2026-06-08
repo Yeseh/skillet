@@ -15,14 +15,18 @@ use crate::workspace::{self, Workspace};
 /// Severity of a check diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    /// A hard error; checking fails.
     Error,
+    /// A non-fatal advisory.
     Warning,
 }
 
 /// A diagnostic produced by [`check`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckDiag {
+    /// Severity of the diagnostic.
     pub severity: Severity,
+    /// Human-readable description of the problem.
     pub message: String,
     /// 1-based line in the full source file (frontmatter included).
     pub line: u32,

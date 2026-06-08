@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub mod pipeline;
+/// Individual lint rule implementations.
 pub mod rules;
 
 // ── LintContext ───────────────────────────────────────────────────────────────
@@ -145,6 +146,7 @@ impl LintOptions {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+/// Constructs a [`Diagnostic`] without location information.
 pub fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {
     Diagnostic {
         rule: rule.to_string(),
@@ -159,6 +161,7 @@ pub fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Dia
     }
 }
 
+/// Constructs a [`Diagnostic`] with optional file/line/column location.
 pub fn diag_located(
     severity: Severity,
     skill: &str,
