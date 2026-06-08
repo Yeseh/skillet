@@ -162,21 +162,19 @@ mod tests {
 
         // Assert
         assert_eq!(
-            parsed["workspace"]["skills_src_dir"].as_str().unwrap(),
+            parsed["workspace"]["src_dir"].as_str().unwrap(),
             "src/skills"
         );
         assert_eq!(
-            parsed["workspace"]["skills_out_dir"].as_str().unwrap(),
+            parsed["workspace"]["out_dir"].as_str().unwrap(),
             "skills"
         );
         assert_eq!(
             parsed["build"]["tokenizer"].as_str().unwrap(),
             "cl100k_base"
         );
-        assert_eq!(
-            parsed["vars"]["project_name"].as_str().unwrap(),
-            "my-project"
-        );
-        assert_eq!(parsed["env"]["CI"]["default"].as_str().unwrap(), "false");
+        // vars and env are empty by default; just verify the sections exist as tables
+        assert!(parsed.get("vars").is_some());
+        assert!(parsed.get("env").is_some());
     }
 }

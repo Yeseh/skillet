@@ -12,24 +12,17 @@
 pub mod artefact;
 pub mod skill;
 
+pub use skill::Skill;
+
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use sha2::Digest;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::compiler::compile::{RenderedFragments, render_fragments};
-use crate::compiler::{CompileDiag};
-use crate::config::SkilletConfig;
-use crate::workspace::skill::{Reference, Script, Skill};
-
-pub trait CompiledArtefact {
-    /// Run the compiler but only emit diagnostics and not target files
-    fn check(&self, ws: &Workspace) -> Result<Vec<CompileDiag>>;
-    /// Run the compiler emit diagnostics and create target files
-    fn compile(&self, ws: &Workspace) -> Result<Option<String>, Vec<CompileDiag>>;
-}
+use crate::config::{EnvVar, SkilletConfig};
+use crate::workspace::skill::{Reference, Script};
 
 // ── Artifact types ─────────────────────────────────────────────────────────────
 
@@ -64,6 +57,12 @@ pub struct Workspace {
     pub fragment_hashes: HashMap<String, String>,
     /// Token count per fragment.
     pub fragment_tokens: HashMap<String, u32>,
+    /// Variable substitutions from `[vars]` in `skillet.toml`.
+    pub vars: BTreeMap<String, String>,
+    /// Declared environment variables with defaults from `[env]`.
+    pub env: BTreeMap<String, EnvVar>,
+    /// Tiktoken encoding name used for all token counting.
+    pub tokenizer: String,
 }
 
 impl Workspace {
@@ -77,8 +76,14 @@ impl Workspace {
         let fragments_dir = root.join(&cfg.workspace.fragments_dir);
         let agents_dir = root.join("agents");
 
-        let skills = discover_skills(&skills_src_dir, &skills_out_dir)?;
-        let agents = discover_agents(&agents_dir, &skills_out_dir)?;
+        let skills: HashMap<String, Skill> = discover_skills(&skills_src_dir, &skills_out_dir)?
+            .into_iter()
+            .map(|s| (s.name.clone(), s))
+            .collect();
+        let agents: HashMap<String, Agent> = discover_agents(&agents_dir, &skills_out_dir)?
+            .into_iter()
+            .map(|a| (a.name.clone(), a))
+            .collect();
 
         let raw_fragments = load_all_fragments(&fragments_dir)?;
         let rendered_fragments = render_fragments(&raw_fragments);
@@ -101,17 +106,20 @@ impl Workspace {
             fragments: rendered_fragments,
             fragment_hashes,
             fragment_tokens,
+            vars: cfg.vars.clone(),
+            env: cfg.env.clone(),
+            tokenizer: cfg.build.tokenizer.clone(),
         })
     }
 
     /// Set of skill names in the workspace.
     pub fn skill_names(&self) -> HashSet<&str> {
-        self.skills.iter().map(|s| s..as_str()).collect()
+        self.skills.keys().map(|k| k.as_str()).collect()
     }
 
     /// Set of agent names in the workspace.
     pub fn agent_names(&self) -> HashSet<&str> {
-        self.agents.iter().map(|a| a.name.as_str()).collect()
+        self.agents.keys().map(|k| k.as_str()).collect()
     }
 
     /// Fragment names present in the workspace.
@@ -186,13 +194,12 @@ fn discover_skills(src_dir: &Path, out_dir: &Path) -> Result<Vec<Skill>> {
 
         let scripts = resolve_scripts(&skill_dir)?;
         let references = resolve_references(&skill_dir)?;
-        let target_dir = out_dir.join(PathBuf::from("skills"));
 
         skills.push(Skill {
             name: dir_name.clone(),
             source_path,
             src_dir: skill_dir,
-            target_dir: target_dir.join(&dir_name),
+            target_dir: out_dir.join(&dir_name),
             scripts,
             references,
         });
@@ -396,15 +403,13 @@ mod tests {
         let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
 
         assert_eq!(ws.skills.len(), 1);
-        assert_eq!(ws.skills[0].name, "diagnose");
-        assert_eq!(ws.skills[0].scripts.len(), 1);
-        assert_eq!(ws.skills[0].scripts[0].relative_path, "scripts/check.sh");
-        assert_eq!(ws.skills[0].references.len(), 1);
-        assert_eq!(
-            ws.skills[0].references[0].relative_path,
-            "references/api/types.pan"
-        );
-        assert_eq!(ws.skills[0].references[0].name, "api/types");
+        let skill = ws.skills.get("diagnose").expect("skill 'diagnose'");
+        assert_eq!(skill.name, "diagnose");
+        assert_eq!(skill.scripts.len(), 1);
+        assert_eq!(skill.scripts[0].relative_path, "scripts/check.sh");
+        assert_eq!(skill.references.len(), 1);
+        assert_eq!(skill.references[0].relative_path, "references/api/types.pan");
+        assert_eq!(skill.references[0].name, "api/types");
         assert!(ws.agents.is_empty());
     }
 
@@ -424,7 +429,7 @@ mod tests {
 
         assert!(ws.skills.is_empty());
         assert_eq!(ws.agents.len(), 1);
-        assert_eq!(ws.agents[0].name, "reviewer");
+        assert_eq!(ws.agents.get("reviewer").expect("agent 'reviewer'").name, "reviewer");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [workspace]
-skills_src_dir = "src/skills"
-skills_out_dir = "skills"
+src_dir = "src/skills"
+out_dir = "skills"
 fragments_dir = "src/skills/_fragments"
 
 [lint]

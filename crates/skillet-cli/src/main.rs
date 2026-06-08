@@ -139,14 +139,6 @@ fn main() -> Result<()> {
             };
             let opts = build::BuildOptions::new_with_format(offline, strict, fmt.clone());
             if let Err(err) = build::run(&cwd, name.as_deref(), &opts, &cfg) {
-                if fmt == build::OutputFormat::Text {
-                    if let Some(build_failure) =
-                        err.downcast_ref::<skillet::compiler::CompleError>()
-                    {
-                        eprintln!("{}", build_failure.render_text());
-                        std::process::exit(1);
-                    }
-                }
                 return Err(err);
             }
         }

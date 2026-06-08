@@ -32,7 +32,6 @@ Check whether the workspace is already initialised before doing anything else.
    description: "One-line description."
    ---
    ```
-
 ---
 
 ## Phase 2 — Resolve untyped references
@@ -45,16 +44,8 @@ skillet lint --pedantic
 
 For each `untyped-backtick` diagnostic, rewrite the backtick to the suggested
 typed ref using the table below.  The lint output already tells you which type
-to use (e.g. `looks like a path — consider \`ref::…\``).
-
-| Detected kind | Example original              | Rewrite to                        |
-|---------------|-------------------------------|-----------------------------------|
-| `ref`         | `` `./scripts/deploy.sh` ``   | `` `ref::./scripts/deploy.sh` ``  |
-| `cmd`         | `` `kubectl apply -f …` ``    | `` `cmd::kubectl` ``              |
-| `skill`       | `` `diagnose` ``              | `` `skill::diagnose` ``           |
-| `url`         | `` `https://example.com` ``   | `` `url::https://example.com` ``  |
-| `var`         | repeated project-specific string | extract to `[vars]` and use `` `var::name` `` |
-| `env`         | environment variable name     | `` `env::VAR_NAME` ``             |
+to use (e.g. `looks like a path — consider \``ref`         | `./scripts/deploy.sh` `   | `ref::./scripts/deploy.sh`cmd`         | `kubectl apply -f …` `    | `cmd::kubectl`skill`       | `diagnose` `              | `skill::diagnose`url`         | `https://example.com` `   | `url::https://example.com`var`         | repeated project-specific string | extract to [vars]` and use `var::name` |
+| `env`         | environment variable name     | `env::VAR_NAME`             |
 
 After each batch of rewrites, re-run lint to confirm the warning count drops:
 
@@ -69,7 +60,7 @@ Also scan for standard markdown links whose target is a local path:
 ```
 
 Where the link target should be treated as a file reference, inline it as a
-typed ref: `` `ref::./path/to/file.md` ``.
+typed ref: `ref::./path/to/file.md`.
 
 ---
 
@@ -101,88 +92,4 @@ two or more skills.  Common candidates:
    Paste the shared passage as its entire content (no frontmatter required).
 2. Replace every occurrence in the `.pan` files with the Handlebars include:
    ```
-   {{> name }}
-   ```
-3. Rebuild and verify:
-   ```
-   skillet build
-   skillet lint
-   ```
-   Confirm no `unused-fragment` warning fires (every fragment is referenced
-   at least once) and that the compiled `SKILL.md` output is unchanged.
-
----
-
-## Phase 4 — Configure skillet.toml
-
-Open `skillet.toml` and tune it for the project.  The default file written by
-`skillet init` is a starting point; adjust each section as needed.
-
-**`[workspace]`** — only change these if the project uses non-default paths:
-
-```toml
-[workspace]
-skills_src_dir = "src/skills"
-skills_out_dir = "skills"
-fragments_dir  = "src/skills/_fragments"
-```
-
-**`[vars]`** — promote any project-specific string that appears in multiple
-skills to a named variable, then reference it with `` `var::name` ``:
-
-```toml
-[vars]
-project_name = "my-project"
-repo_url     = "https://github.com/org/repo"
-```
-
-**`[env]`** — declare environment variables that skills reference, with
-sensible defaults so builds work locally without every variable set:
-
-```toml
-[env]
-CI        = { default = "false" }
-TEAM_NAME = { default = "engineering" }
-```
-
-**`[lint]`** — list every shell command referenced via `` `cmd::…` `` in
-`allowed_commands`.  Add rule IDs to `disable` only when a rule genuinely does
-not apply to the project:
-
-```toml
-[lint]
-max_activation_tokens = 4000
-max_discovery_tokens  = 100
-max_fragment_tokens   = 500
-allowed_commands      = ["docker", "kubectl", "make"]
-disable               = []
-```
-
-**`[build]`** — enable URL verification once you are confident all links are
-reachable; leave it off during the initial migration pass to avoid noise:
-
-```toml
-[build]
-tokenizer   = "cl100k_base"
-verify_urls = false
-```
-
----
-
-## Phase 5 — Verify and finalize
-
-Run the full pipeline to confirm the workspace is clean:
-
-```
-skillet build          # compile all .pan sources to SKILL.md
-skillet check          # confirm outputs are fresh
-skillet lint --strict  # promote warnings to errors; fix any that remain
-skillet budget         # review token costs; split oversized skills if needed
-```
-
-Commit both the source files and the compiled outputs together:
-
-```
-git add src/skills/ skills/ skillet.toml skillet.lock
-git commit -m "Migrate skills to skillet workspace"
-```
+   {

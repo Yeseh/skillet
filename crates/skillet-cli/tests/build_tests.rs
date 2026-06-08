@@ -75,7 +75,7 @@ fn build_expands_fragment_includes_in_output() {
     // Append fragment include to the skill source
     let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
     let mut source = fs::read_to_string(&source_path).unwrap();
-    source.push_str("\n{{> note }}\n");
+    source.push_str("\n{> note <}\n");
     fs::write(&source_path, &source).unwrap();
 
     // Act
@@ -91,6 +91,41 @@ fn build_expands_fragment_includes_in_output() {
     assert!(output.contains("## Shared Note"));
     assert!(output.contains("fragment content here"));
     assert!(!output.contains("{{> note }}"));
+}
+
+#[test]
+fn build_errors_on_ref_in_fragment() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    // Create a fragment whose content contains a typed ref
+    fs::write(
+        tmp.path().join("src/skills/_fragments/note.fragment.pan"),
+        "## Note\nSee `skill::other-skill` for details.\n",
+    )
+    .unwrap();
+
+    // Append a reference to the fragment in the skill source
+    let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
+    let mut source = fs::read_to_string(&source_path).unwrap();
+    source.push_str("\n{> note <}\n");
+    fs::write(&source_path, &source).unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    // Assert — build must fail with a message about refs
+    assert!(
+        !out.status.success(),
+        "build should fail when fragment contains a ref"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("refs are not supported in fragments"),
+        "stderr should mention refs not supported: {stderr}"
+    );
 }
 
 #[test]
@@ -255,7 +290,7 @@ fn build_records_fragment_hash_in_lockfile() {
     .unwrap();
     let source_path = tmp.path().join("src/skills/my-skill/my-skill.pan");
     let mut source = fs::read_to_string(&source_path).unwrap();
-    source.push_str("\n{{> note }}\n");
+    source.push_str("\n{> note <}\n");
     fs::write(&source_path, &source).unwrap();
 
     // Act

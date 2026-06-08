@@ -1064,7 +1064,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "skillet-compiler",
  "tempfile",
  "tiktoken-rs",
  "toml",
@@ -1093,10 +1092,6 @@ dependencies = [
  "walkdir",
  "webpki-roots",
 ]
-
-[[package]]
-name = "skillet-compiler"
-version = "0.1.0"
 
 [[package]]
 name = "slab"

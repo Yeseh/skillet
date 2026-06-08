@@ -36,7 +36,7 @@
     },
     "typed-ref": {
       "comment": "Typed ref in backticks: `ref::path`, `cmd::git`, `skill::name`, `var::x`, `env::VAR`",
-      "match": "(`)(ref|cmd|skill|var|env)(::)([^`]*?)(`)",
+      "match": "((?<!`)`(?!`))(ref|cmd|skill|var|env)(::)([^`]*?)((?<!`)`(?!`))",
       "captures": {
         "1": { "name": "punctuation.definition.ref.begin.pan" },
         "2": { "name": "support.type.ref-kind.pan" },

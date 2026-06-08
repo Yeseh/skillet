@@ -56,7 +56,7 @@ pub fn check(source: &SourceFile, _config: &SkilletConfig) -> Vec<Diagnostic> {
     if fm
         .description
         .as_deref()
-        .map(|d| d.trim().is_empty())
+        .map(|d: &str| d.trim().is_empty())
         .unwrap_or(true)
     {
         diags.push(diag(

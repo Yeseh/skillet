@@ -1,13 +1,15 @@
+allowed_commands = ["playwright", "docker", "kubectl"]
+
 [workspace]
-skills_src_dir = "src/skills"
-skills_out_dir = "skills"
+src_dir = "src/skills"
+out_dir = "skills"
 fragments_dir = "src/skills/_fragments"
 
 [lint]
 max_activation_tokens = 4000
 max_discovery_tokens = 100
 max_fragment_tokens = 500
-allowed_commands = ["playwright", "docker", "kubectl"]
+
 disable = []
 
 [build]

@@ -1,8 +1,6 @@
-use std::{fmt::{Display, Pointer}, path::PathBuf};
+use std::{fmt::Display, path::PathBuf};
 
 use serde::Deserialize;
-
-use crate::workspace::{CompiledArtefact};
 
 /// The YAML frontmatter of a `.pan` skill source file.
 ///
@@ -32,16 +30,6 @@ pub struct Skill {
     pub scripts: Vec<Script>,
     /// Reference `.pan` files discovered within this skill.
     pub references: Vec<Reference>,
-}
-
-impl CompiledArtefact for Skill {
-    fn check(&self, ws: &super::Workspace) -> anyhow::Result<Vec<crate::compiler::CompileDiag>> {
-        todo!()
-    }
-
-    fn compile(&self, ws: &super::Workspace) -> anyhow::Result<Option<String>, Vec<crate::compiler::CompileDiag>> {
-        todo!()
-    }
 }
 
 /// A script file associated with a skill.

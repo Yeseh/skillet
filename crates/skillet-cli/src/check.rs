@@ -58,11 +58,11 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
         .with_context(|| format!("failed to read {}", lock_path.display()))?;
 
     let source_names: std::collections::HashSet<&str> =
-        ws.skills.iter().map(|s| s.name.as_str()).collect();
+        ws.skills.values().map(|s| s.name.as_str()).collect();
 
     let mut results: Vec<SkillResult> = ws
         .skills
-        .iter()
+        .values()
         .map(|skill| {
             let mut reasons: Vec<String> = Vec::new();
             let mut diffs: Vec<DiffEntry> = Vec::new();

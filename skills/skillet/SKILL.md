@@ -53,19 +53,15 @@ Skill content here.
 
 Inside `.pan` files you can use backtick typed refs to reference external resources:
 
-- `ref::` + path — file reference (validated at build time)
-- `cmd::` + command — shell command (checked on PATH)
-- `skill::` + name — another skill in the workspace
-- `var::` + name — variable from `[vars]` in `skillet.toml`
-- `env::` + name — environment variable with default from `[env]`
+- `` + path — file reference (validated at build time)
+- `` + command — shell command (checked on PATH)
+- `` + name — another skill in the workspace
+- `` + name — variable from `[vars]` in `skillet.toml`
+- `` + name — environment variable with default from `[env]`
 
 ## Fragments
 
-Extract shared passages to `src/skills/_fragments/<name>.fragment.pan` and include with `{{> name }}`.
-
-## Workflow
-
-1. `skillet new <name>` — scaffold a skill
+Extract shared passages to `src/skills/_fragments/<name>.fragment.pan` and include with `{` — scaffold a skill
 2. Edit `src/skills/<name>/<name>.pan`
 3. `skillet build` — compile to `skills/<name>/SKILL.md`
 4. `skillet lint` — check for quality issues

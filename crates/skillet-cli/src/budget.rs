@@ -64,8 +64,8 @@ pub fn run(
     let lf = lockfile::read(workspace_path)?;
 
     let targets: Vec<&Skill> = match skill_name {
-        Some(name) => ws.skills.iter().filter(|s| s.name == name).collect(),
-        None => ws.skills.iter().collect(),
+        Some(name) => ws.skills.values().filter(|s| s.name == name).collect(),
+        None => ws.skills.values().collect(),
     };
 
     let mut rows: Vec<BudgetRow> = Vec::with_capacity(targets.len());

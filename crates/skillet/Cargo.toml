@@ -5,7 +5,6 @@ edition = "2021"
 authors = ["Jesse Wellenberg"]
 
 [dependencies]
-skillet-compiler = { path = "../skillet-compiler" }
 toml = "1.1.2+spec-1.1.0"
 serde = { version = "1", features = ["derive"] }
 walkdir = "2"
@@ -24,10 +23,6 @@ rayon = "1"
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 serde_json = "1.0.149"
-
-[[bench]]
-name = "lint"
-harness = false
 
 [lints.rust]
 missing_docs = "warn"

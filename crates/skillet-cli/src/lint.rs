@@ -38,10 +38,10 @@ pub fn run(
             } else {
                 workspace_path.join(path)
             };
-            ws.skills.iter().filter(|s| s.source_path == abs).collect()
+            ws.skills.values().filter(|s| s.source_path == abs).collect()
         }
-        (None, Some(name)) => ws.skills.iter().filter(|s| s.name == name).collect(),
-        (None, None) => ws.skills.iter().collect(),
+        (None, Some(name)) => ws.skills.values().filter(|s| s.name == name).collect(),
+        (None, None) => ws.skills.values().collect(),
     };
 
     // ── Build LintContext from ResolvedWorkspace ─────────────────────────────
@@ -56,13 +56,9 @@ pub fn run(
     let source_files = pipeline::scan_sources(&inputs, &config.build.tokenizer);
     let p1_elapsed = p1_start.elapsed();
 
-    // ── Phase 2: Parallel ref extraction ─────────────────────────────────────
-    let p2_start = std::time::Instant::now();
-    let skill_names: Vec<&str> = ws.skills.iter().map(|s| s.name.as_str()).collect();
-    let (source_files, _all_refs) = pipeline::extract_refs(source_files, &skill_names);
-    let p2_elapsed = p2_start.elapsed();
+    let p2_elapsed = std::time::Duration::ZERO;
 
-    let files_scanned = source_files.len();
+    let files_scanned: usize = source_files.len();
 
     // ── Phase 3: rayon::join(branch A, branch B) ─────────────────────────────
     let p3_start = std::time::Instant::now();
@@ -145,17 +141,14 @@ fn build_lint_context(ws: &Workspace, config: &SkilletConfig) -> Result<LintCont
     let mut ctx = LintContext::default();
 
     // Skill files and known dirs from the resolved workspace.
-    for skill in &ws.skills {
+    for (_, skill) in &ws.skills {
         let files = ws.get_references_for_skill(skill);
         ctx.skill_files.insert(skill.name.clone(), files);
         ctx.known_skill_dirs.insert(skill.name.clone());
     }
 
-    // Known commands from workspace-level scan.
-    ctx.known_commands = ws.known_commands.clone();
-
     // Compiled SKILL.md hashes and texts.
-    for skill in &ws.skills {
+    for (_, skill) in &ws.skills {
         let path = skill.target_dir.join("SKILL.md");
         if let Ok(text) = std::fs::read_to_string(&path) {
             let hash = format!(
@@ -231,7 +224,6 @@ fn lint_skill(
 
     diags.extend(rules::invalid_frontmatter::check(source, config));
     diags.extend(rules::stale_refs::check(source, config, ctx));
-    diags.extend(rules::markdown_links::check(source, config, ctx));
     diags.extend(rules::untyped_backtick::check(source));
     diags.extend(rules::stale_build::check(source, lockfile, ctx));
     diags.extend(rules::oversized::check_skill(source, config, lockfile, ctx));

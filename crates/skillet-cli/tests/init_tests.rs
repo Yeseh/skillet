@@ -37,11 +37,11 @@ fn init_creates_skills_dir_fragments_dir_and_config() {
     let parsed: toml::Value = toml::from_str(&content).unwrap();
 
     assert_eq!(
-        parsed["workspace"]["skills_src_dir"].as_str().unwrap(),
+        parsed["workspace"]["src_dir"].as_str().unwrap(),
         "src/skills"
     );
     assert_eq!(
-        parsed["workspace"]["skills_out_dir"].as_str().unwrap(),
+        parsed["workspace"]["out_dir"].as_str().unwrap(),
         "skills"
     );
     assert_eq!(
@@ -67,15 +67,6 @@ fn init_creates_skills_dir_fragments_dir_and_config() {
         "cl100k_base"
     );
     assert!(!parsed["build"]["verify_urls"].as_bool().unwrap());
-    assert_eq!(
-        parsed["vars"]["project_name"].as_str().unwrap(),
-        "my-project"
-    );
-    assert_eq!(parsed["env"]["CI"]["default"].as_str().unwrap(), "false");
-    assert_eq!(
-        parsed["env"]["TEAM_NAME"]["default"].as_str().unwrap(),
-        "engineering"
-    );
 }
 
 #[test]

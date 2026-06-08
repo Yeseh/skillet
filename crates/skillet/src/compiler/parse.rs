@@ -118,7 +118,7 @@ impl<'a> PanParse<'a> {
     #[must_use]
     pub fn new(pan_source: &'a PanSource) -> Self {
         Self {
-            path: pan_source.path.clone(),
+            path: None,
             src: &pan_source.src,
             nodes: Vec::new(),
             errors: Vec::new(),
@@ -441,7 +441,7 @@ mod tests {
     }
 
     fn parse_str(src: &str) -> ParseResult {
-        let pan = PanSource::new(src.to_string(), None);
+        let pan = PanSource::new(src.to_string());
         let mut parsed = PanParse::new(&pan);
         parsed.parse();
         ParseResult {

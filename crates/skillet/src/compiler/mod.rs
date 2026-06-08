@@ -12,28 +12,6 @@ use std::path::{Path};
 
 use crate::workspace::artefact::Artefact;
 
-/// Severity of a compile-time diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagSeverity {
-    /// Build will fail.
-    Error,
-    /// Build succeeds but the issue should be addressed.
-    Warning,
-}
-
-/// A diagnostic produced by [`compile_body`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompileDiag {
-    /// Severity level.
-    pub severity: DiagSeverity,
-    /// Human-readable description of the problem.
-    pub message: String,
-    /// 1-based line number in the body text.
-    pub line: u32,
-    /// 1-based column number in the body text.
-    pub col: u32,
-}
-
 /// A 1-based line/column location within a source string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceLocation {
@@ -73,7 +51,7 @@ impl PanSource {
     }
 
     pub fn from_artefact(artefact: Artefact) -> std::io::Result<Self> {
-        Self::from_path(artefact.source_path)
+        Self::from_path(&artefact.source_path)
     }
 
     /// Loads a source file from disk.

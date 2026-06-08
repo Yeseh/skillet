@@ -8,12 +8,11 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use owo_colors::OwoColorize;
 use serde::Serialize;
-use skillet::compiler::{compile_pan, CompileContext, PanSource};
+use skillet::check::{CheckDiag, Severity};
+use skillet::compiler::PanSource;
 use skillet::config::SkilletConfig;
-use skillet::lockfile::{self, ArtefactEntry, FragmentLockEntry, LockMeta, Lockfile};
-use skillet::tokens;
+use skillet::lockfile::{self, ArtefactEntry, ArtefactRefs, FragmentLockEntry, LockMeta, Lockfile};
 use skillet::workspace::{hash_bytes, hash_file, Skill, Workspace};
-use std::collections::HashSet;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -61,6 +60,7 @@ pub struct BuildReport {
 /// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
 pub fn run(
     workspace_path: &Path,
+    skill_name: Option<&str>,
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
@@ -71,13 +71,12 @@ pub fn run(
 
     let targets: Vec<&Skill> = match skill_name {
         Some(name) => {
-            let found = ws.skills.iter().find(|s| s.name == name);
-            match found {
+            match ws.skills.get(name) {
                 Some(s) => vec![s],
                 None => bail!("skill '{}' not found in workspace", name),
             }
         }
-        None => ws.skills.iter().collect(),
+        None => ws.skills.values().collect(),
     };
 
     if targets.is_empty() {
@@ -98,17 +97,6 @@ pub fn run(
         return Ok(());
     }
 
-    let known_skills: HashSet<String> = ws
-        .skill_names()
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-    let known_agents: HashSet<String> = ws
-        .agent_names()
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-
     let mut lockfile = lockfile::read(workspace_path)?;
     lockfile.meta = Some(LockMeta {
         skillet_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -120,12 +108,7 @@ pub fn run(
     let mut warnings: Vec<String> = Vec::new();
 
     for skill in &targets {
-        compile_one_skill(
-            skill,
-            cfg,
-            &ws,
-            &mut lockfile,
-        )?;
+        compile_one_skill(skill, &ws, &mut lockfile)?;
         if opts.format != OutputFormat::Json {
             println!("built {}", skill.name);
         }
@@ -158,61 +141,97 @@ pub fn run(
     Ok(())
 }
 
-fn compile_one_skill(
-    skill: &Skill,
-    cfg: &SkilletConfig,
-    ws: &Workspace,
-    lockfile: &mut Lockfile,
-) -> Result<()> {
+fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> Result<()> {
+    use std::collections::HashSet;
+
     let source_content = std::fs::read_to_string(&skill.source_path)
         .with_context(|| format!("failed to read {}", skill.source_path.display()))?;
 
-    let known_references = ws.get_references_for_skill(skill);
+    let pan_source = PanSource::new(source_content);
 
-    // Build diagnostic path using workspace + relative path with forward slashes.
-    // This matches the PathBuf::join("src/skills/…") pattern used in tests, ensuring
-    // consistent separator characters across OS (Windows preserves '/' in single-arg joins).
-    let pan_path = ws.root.join(format!(
-        "{}/{}/{}.pan",
-        cfg.workspace.src_dir.trim_end_matches('/'),
-        skill.name,
-        skill.name
-    ));
+    let known_files: HashSet<String> = WalkDir::new(&skill.src_dir)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| {
+            e.path()
+                .strip_prefix(&skill.src_dir)
+                .ok()
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+        })
+        .collect();
 
-    let pan_source = PanSource::new(
-        source_content, 
-        Some(pan_path));
+    let diags = skillet::check::check(ws, &pan_source, &known_files);
 
-    let ctx = CompileContext {
-        source: pan_source,
-        artifact_name: skill.name.clone(),
-        fragments: &ws.fragments,
-        vars: &cfg.vars,
-        env: &cfg.env,
-        known_references: &known_references,
-        known_skills,
-        known_agents,
-        tokenizer: &cfg.build.tokenizer,
-    };
-
-    let result = compile_pan(&ctx)?;
-
-    for w in &result.diagnostics {
-        eprintln!("{}", w.render_text());
+    for d in &diags {
+        eprintln!("{}", render_diag(skill, d));
     }
 
-    std::fs::create_dir_all(&skill.target_dir).with_context(|| {
-        format!(
-            "failed to create output directory {}",
-            skill.target_dir.display()
-        )
-    })?;
+    if diags.iter().any(|d| d.severity == Severity::Error) {
+        anyhow::bail!("check errors in '{}'", skill.name);
+    }
+
+    let output = skillet::compiler::compile::compile(ws, &pan_source);
+
+    std::fs::create_dir_all(&skill.target_dir)?;
     let output_path = skill.target_dir.join("SKILL.md");
-    std::fs::write(&output_path, &result.output)
-        .with_context(|| format!("failed to write {}", output_path.display()))?;
+    std::fs::write(&output_path, &output.text)?;
 
     let source_hash = hash_file(&skill.source_path)?;
-    let compiled_hash = hash_bytes(result.output.as_bytes());
+    let compiled_hash = hash_bytes(output.text.as_bytes());
+
+    let skill_names: Vec<&str> = ws.skills.keys().map(String::as_str).collect();
+    let parsed_refs = skillet::refs::ParsedRefs::extract(pan_source.as_str(), &skill_names);
+
+    let refs = ArtefactRefs {
+        paths: {
+            let mut v: Vec<String> = parsed_refs
+                .typed
+                .iter()
+                .filter(|r| r.kind == skillet::refs::RefKind::Ref)
+                .map(|r| r.value.clone())
+                .chain(parsed_refs.links.iter().filter(|l| !l.is_url).map(|l| l.target.clone()))
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        },
+        commands: {
+            let mut v: Vec<String> = parsed_refs
+                .typed
+                .iter()
+                .filter(|r| r.kind == skillet::refs::RefKind::Cmd)
+                .map(|r| r.value.clone())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        },
+        skills: {
+            let mut v: Vec<String> = parsed_refs
+                .typed
+                .iter()
+                .filter(|r| r.kind == skillet::refs::RefKind::Skill)
+                .map(|r| r.value.clone())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        },
+        urls: {
+            let mut v: Vec<String> = parsed_refs
+                .links
+                .iter()
+                .filter(|l| l.is_url)
+                .map(|l| l.target.clone())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        },
+        agents: vec![],
+    };
 
     let old_minhash = lockfile
         .skills
@@ -221,42 +240,36 @@ fn compile_one_skill(
         .map(|e| e.minhash.clone())
         .unwrap_or_default();
 
-    let ref_tokens: u32 = result
-        .ref_paths
-        .iter()
-        .filter_map(|rel| {
-            let path = skill.src_dir.join(rel);
-            std::fs::read_to_string(&path)
-                .ok()
-                .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
-        })
-        .sum();
-    let references_tokens: u32 = skill
-        .references
-        .iter()
-        .filter_map(|r| {
-            std::fs::read_to_string(&r.absolute_path)
-                .ok()
-                .map(|t| tokens::count_tokens(&t, &cfg.build.tokenizer))
-        })
-        .sum();
-    let transitive_tokens = result.activation_tokens + ref_tokens + references_tokens;
-
     lockfile.skills.insert(
         skill.name.clone(),
         ArtefactEntry {
             source_hash,
             compiled_hash,
-            discovery_tokens: result.discovery_tokens,
-            activation_tokens: result.activation_tokens,
-            transitive_tokens,
-            fragments_used: result.fragments_used,
-            refs: result.refs,
+            discovery_tokens: output.discovery_tokens,
+            activation_tokens: output.activation_tokens,
+            transitive_tokens: 0,
+            fragments_used: output.fragments_used,
+            refs,
             minhash: old_minhash,
         },
     );
 
     Ok(())
+}
+
+fn render_diag(skill: &Skill, d: &CheckDiag) -> String {
+    let level = match d.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+    };
+    format!(
+        "[{level}] {} {} ({}:{}:{})",
+        skill.name,
+        d.message,
+        skill.source_path.display(),
+        d.line,
+        d.col
+    )
 }
 
 fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<()> {

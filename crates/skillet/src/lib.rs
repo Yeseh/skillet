@@ -2,6 +2,7 @@
 //!
 //! This crate provides the core logic for the `skillet` CLI tool.
 
+pub mod check;
 pub mod compiler;
 pub mod config;
 pub mod lint;

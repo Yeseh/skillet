@@ -108,8 +108,32 @@ fn adopt_skills(skills_out_dir: &Path, skills_src_dir: &Path) -> Result<()> {
             if sub_name == "reference" {
                 adopt_reference_dir(sub_path, &dest_sub_dir)?;
             } else {
-                skillet::workspace::copy_dir_recursive(sub_path, &dest_sub_dir)?;
+                copy_dir_recursive(sub_path, &dest_sub_dir)?;
             }
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    for entry in WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let rel = path.strip_prefix(src).unwrap();
+        if rel == std::path::Path::new("") {
+            continue;
+        }
+        if path.is_dir() {
+            std::fs::create_dir_all(dest.join(rel))
+                .with_context(|| format!("failed to create {}", dest.join(rel).display()))?;
+        } else {
+            let dest_file = dest.join(rel);
+            if let Some(parent) = dest_file.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            std::fs::copy(path, &dest_file).with_context(|| {
+                format!("failed to copy {} to {}", path.display(), dest_file.display())
+            })?;
         }
     }
     Ok(())

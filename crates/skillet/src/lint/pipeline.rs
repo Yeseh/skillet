@@ -4,7 +4,7 @@
 //! These two phases produce the pre-scanned data that all lint rules consume,
 //! eliminating redundant file I/O inside individual rule implementations.
 
-use crate::parse::SkillFrontmatter;
+use crate::workspace::skill::SkillFrontmatter;
 use crate::refs::{ParsedRefs};
 use crate::tokens::count_tokens;
 use rayon::prelude::*;

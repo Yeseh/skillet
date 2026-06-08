@@ -159,12 +159,12 @@ impl ParsedRefs {
     /// `skill_names` is used by the untyped-backtick classifier to recognise
     /// cross-skill references.
     pub fn extract(raw: &str, skill_names: &[&str]) -> Self {
-        use skillet_compiler::{
+        use crate::compiler::{
             parse::{Node, PanParse, RefKind as ParserRefKind},
             PanSource,
         };
 
-        let source = PanSource::new(raw.to_string(), None);
+        let source = PanSource::new(raw.to_string());
         let mut parser = PanParse::new(&source);
         parser.parse();
 

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/skillet", "crates/skillet-cli", "crates/skillet-compiler"]
+members = ["crates/skillet", "crates/skillet-cli"]
 resolver = "2"
 
 [profile.release]

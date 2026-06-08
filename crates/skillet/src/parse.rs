@@ -5,8 +5,8 @@
 //! `Deserialize` struct.
 
 use gray_matter::{engine::YAML, Matter};
-use serde::Deserialize;
 
+use crate::workspace::skill::SkillFrontmatter;
 
 /// Parses the YAML frontmatter of a `.pan` source string.
 ///
