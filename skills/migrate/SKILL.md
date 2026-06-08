@@ -44,7 +44,11 @@ skillet lint --pedantic
 
 For each `untyped-backtick` diagnostic, rewrite the backtick to the suggested
 typed ref using the table below.  The lint output already tells you which type
-to use (e.g. `looks like a path — consider \``ref`         | `./scripts/deploy.sh` `   | `ref::./scripts/deploy.sh`cmd`         | `kubectl apply -f …` `    | `cmd::kubectl`skill`       | `diagnose` `              | `skill::diagnose`url`         | `https://example.com` `   | `url::https://example.com`var`         | repeated project-specific string | extract to [vars]` and use `var::name` |
+to use (e.g. `looks like a path — consider \``ref`         | `./scripts/deploy.sh`   | `ref::./scripts/deploy.sh`  |
+| `cmd`         | `kubectl apply -f …`    | `cmd::kubectl`              |
+| `skill`       | `diagnose`              | `skill::diagnose`           |
+| `url`         | `https://example.com`   | `url::https://example.com`  |
+| `var`         | repeated project-specific string | extract to [vars]` and use `var::name` |
 | `env`         | environment variable name     | `env::VAR_NAME`             |
 
 After each batch of rewrites, re-run lint to confirm the warning count drops:

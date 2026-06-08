@@ -40,7 +40,7 @@ const REF_DECORATION = vscode.window.createTextEditorDecorationType({
   after: { margin: "0 1px" },
 });
 
-const TYPED_REF_RE = /`(ref|cmd|skill|var|env)::[^`]*?`/g;
+const TYPED_REF_RE = /((?<!`)`(?!`))(ref|cmd|skill|var|env|agent)(::)([^`]*?)((?<!`)`(?!`))/g;
 
 function applyRefDecorations(editor: vscode.TextEditor): void {
   const ranges: vscode.Range[] = [];
@@ -99,10 +99,10 @@ function isPedantic(): boolean {
 // ── CLI invocation ────────────────────────────────────────────────────────────
 
 function runLint(
-  document: vscode.TextDocument,
+  key: string,
   workspaceRoot: string
 ): void {
-  const docKey = document.uri.toString();
+  const docKey = key;
 
   // Cancel any existing in-flight process for this document
   const existing = inFlightProcesses.get(docKey);
@@ -262,7 +262,7 @@ function onDidSaveTextDocument(document: vscode.TextDocument): void {
       // No skillet.toml found — silently skip
       return;
     }
-    runLint(document, workspaceRoot);
+    runLint(document.uri.toString(), workspaceRoot);
   }, DEBOUNCE_MS);
 
   debounceTimers.set(docKey, timer);
@@ -307,6 +307,23 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(onDidSaveTextDocument)
   );
+
+  // Re-run lint when SKILL.md files change (e.g. after `skillet build`)
+  const skillWatcher = vscode.workspace.createFileSystemWatcher("**/SKILL.md");
+  const onSkillMdChanged = () => {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders) return;
+    for (const folder of folders) {
+      const root = folder.uri.fsPath;
+      if (fs.existsSync(path.join(root, "skillet.toml"))) {
+        runLint(`workspace:${root}`, root);
+        break;
+      }
+    }
+  };
+  context.subscriptions.push(skillWatcher.onDidChange(onSkillMdChanged));
+  context.subscriptions.push(skillWatcher.onDidCreate(onSkillMdChanged));
+  context.subscriptions.push(skillWatcher);
 
   // Clean up diagnostics when a file is closed
   context.subscriptions.push(

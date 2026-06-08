@@ -48,10 +48,10 @@ to use (e.g. `looks like a path — consider \`ref::…\``).
 
 | Detected kind | Example original              | Rewrite to                        |
 |---------------|-------------------------------|-----------------------------------|
-| `ref`         | `` `./scripts/deploy.sh` ``   | ``ref::./scripts/deploy.sh``  |
-| `cmd`         | `` `kubectl apply -f …` ``    | ``cmd::kubectl``              |
-| `skill`       | `` `diagnose` ``              | ``skill::diagnose``           |
-| `url`         | `` `https://example.com` ``   | ``url::https://example.com``  |
+| `ref`         | ``./scripts/deploy.sh``   | ``ref::./scripts/deploy.sh``  |
+| `cmd`         | ``kubectl apply -f …``    | ``cmd::kubectl``              |
+| `skill`       | ``diagnose``              | ``skill::diagnose``           |
+| `url`         | ``https://example.com``   | ``url::https://example.com``  |
 | `var`         | repeated project-specific string | extract to `[vars]` and use ``var::name`` |
 | `env`         | environment variable name     | ``env::VAR_NAME``             |
 
@@ -127,7 +127,7 @@ fragments_dir  = "src/skills/_fragments"
 ```
 
 **`[vars]`** — promote any project-specific string that appears in multiple
-skills to a named variable, then reference it with `` `var::name` ``:
+skills to a named variable, then reference it with ``var::name``:
 
 ```toml
 [vars]
@@ -144,7 +144,7 @@ CI        = { default = "false" }
 TEAM_NAME = { default = "engineering" }
 ```
 
-**`[lint]`** — list every shell command referenced via `` `cmd::…` `` in
+**`[lint]`** — list every shell command referenced via ``cmd::…`` in
 `allowed_commands`.  Add rule IDs to `disable` only when a rule genuinely does
 not apply to the project:
 

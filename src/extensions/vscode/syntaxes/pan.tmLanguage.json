@@ -6,6 +6,7 @@
   "patterns": [
     { "include": "#frontmatter" },
     { "include": "#block-include" },
+    { "include": "#typed-ref-double" },
     { "include": "#typed-ref" },
     { "include": "#markdown" }
   ],
@@ -26,8 +27,8 @@
       ]
     },
     "block-include": {
-      "comment": "Block include directive: {{> fragment-name }}",
-      "match": "(\\{\\{>)\\s*([a-zA-Z0-9_-]+)\\s*(\\}\\})",
+      "comment": "Block include directive: {> fragment-name }",
+      "match": "(\\{>)\\s*([a-zA-Z0-9_-]+)\\s*(\\})",
       "captures": {
         "1": { "name": "punctuation.definition.include.begin.pan keyword.control.pan" },
         "2": { "name": "entity.name.function.pan" },
@@ -36,7 +37,7 @@
     },
     "typed-ref": {
       "comment": "Typed ref in backticks: `ref::path`, `cmd::git`, `skill::name`, `var::x`, `env::VAR`",
-      "match": "((?<!`)`(?!`))(ref|cmd|skill|var|env)(::)([^`]*?)((?<!`)`(?!`))",
+      "match": "((?<!`)`(?!`))(ref|cmd|skill|var|env|agent)(::)([^`]*?)((?<!`)`(?!`))",
       "captures": {
         "1": { "name": "punctuation.definition.ref.begin.pan" },
         "2": { "name": "support.type.ref-kind.pan" },

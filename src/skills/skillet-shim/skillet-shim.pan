@@ -5,7 +5,7 @@ description: "Shim that delegates skill management to the skillet CLI."
 
 # skillet-shim
 
-This project uses ``var::project_name`` to manage AI agent skills. Use the ``var::project_name`` CLI for all skill-related tasks.
+This project uses `var::project_name` to manage AI agent skills. Use the `var::project_name` CLI for all skill-related tasks.
 
 ## Get full documentation
 

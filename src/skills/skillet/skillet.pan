@@ -13,23 +13,23 @@ Skillet is a CLI for authoring skills as `.pan` source files and compiling them 
 
 A workspace contains:
 
-- `skillet.toml` — workspace configuration
-- `src/skills/<name>/<name>.pan` — skill source files
-- `src/skills/_fragments/` — reusable shared fragments
-- `skills/<name>/SKILL.md` — compiled outputs
-- `skillet.lock` — lockfile with hashes and token counts
+- ``skillet.toml`` — workspace configuration
+- ``src/skills/<name>/<name>.pan`` — skill source files
+- ``src/skills/_fragments/`` — reusable shared fragments
+- ``skills/<name>/SKILL.md`` — compiled outputs
+- ``skillet.lock`` — lockfile with hashes and token counts
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `skillet init` | Initialize a workspace |
-| `skillet new <name>` | Scaffold a new skill source |
-| `skillet build [name]` | Compile one or all skills |
-| `skillet check` | Verify compiled output is fresh |
-| `skillet lint [name]` | Run quality lint rules |
-| `skillet budget [name]` | Show token cost information |
-| `skillet skill <name>` | Print a bundled skill to stdout |
+| ``skillet init`` | Initialize a workspace |
+| ``skillet new <name>`` | Scaffold a new skill source |
+| ``skillet build [name]`` | Compile one or all skills |
+| ``skillet check`` | Verify compiled output is fresh |
+| ``skillet lint [name]`` | Run quality lint rules |
+| ``skillet budget [name]`` | Show token cost information |
+| ``skillet skill <name>`` | Print a bundled skill to stdout |
 
 Commands that support formatting accept `--format json`.
 By default, output is plain text.
@@ -53,20 +53,20 @@ Skill content here.
 
 Inside `.pan` files you can use backtick typed refs to reference external resources:
 
-- `ref::` + path — file reference (validated at build time)
-- `cmd::` + command — shell command (checked on PATH)
-- `skill::` + name — another skill in the workspace
-- `var::` + name — variable from `[vars]` in `skillet.toml`
-- `env::` + name — environment variable with default from `[env]`
+- ``ref::`` + path — file reference (validated at build time)
+- ``cmd::`` + command — shell command (checked on PATH)
+- ``skill::`` + name — another skill in the workspace
+- ``var::`` + name — variable from `[vars]` in `skillet.toml`
+- ``env::`` + name — environment variable with default from `[env]`
 
 ## Fragments
 
-Extract shared passages to `src/skills/_fragments/<name>.fragment.pan` and include with `{{> name }}`.
+Extract shared passages to ``src/skills/_fragments/<name>.fragment.pan`` and include with ``{> name }``.
 
 ## Workflow
 
-1. `skillet new <name>` — scaffold a skill
-2. Edit `src/skills/<name>/<name>.pan`
-3. `skillet build` — compile to `skills/<name>/SKILL.md`
-4. `skillet lint` — check for quality issues
-5. `skillet check` in CI — verify output is fresh
+1. ``skillet new <name>`` — scaffold a skill
+2. Edit ``src/skills/<name>/<name>.pan``
+3. ``skillet build`` — compile to ``skills/<name>/SKILL.md``
+4. ``skillet lint`` — check for quality issues
+5. ``skillet check`` in CI — verify output is fresh
