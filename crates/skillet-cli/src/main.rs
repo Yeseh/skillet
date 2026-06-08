@@ -1,10 +1,8 @@
 mod budget;
 mod build;
 mod check;
-mod config;
 mod init;
 mod lint;
-mod net;
 mod new;
 mod skill;
 
@@ -120,7 +118,7 @@ fn main() -> Result<()> {
         }
         Commands::New { name, format } => {
             let cwd = std::env::current_dir()?;
-            let cfg = config::load(&cwd)?;
+            let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let json = matches!(format, Some(FormatArg::Json));
             let skills_src_dir = cwd.join(&cfg.workspace.src_dir);
             new::run(&skills_src_dir, &name, json)?;
@@ -132,19 +130,17 @@ fn main() -> Result<()> {
             format,
         } => {
             let cwd = std::env::current_dir()?;
-            let cfg = config::load(&cwd)?;
+            let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => build::OutputFormat::Json,
                 None => build::OutputFormat::Text,
             };
             let opts = build::BuildOptions::new_with_format(offline, strict, fmt.clone());
-            if let Err(err) = build::run(&cwd, name.as_deref(), &opts, &cfg) {
-                return Err(err);
-            }
+            build::run(&cwd, name.as_deref(), &opts, &cfg)?;
         }
         Commands::Check { format } => {
             let cwd = std::env::current_dir()?;
-            let cfg = config::load(&cwd)?;
+            let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => check::OutputFormat::Json,
                 None => check::OutputFormat::Text,
@@ -156,7 +152,7 @@ fn main() -> Result<()> {
         }
         Commands::Budget { name, format } => {
             let cwd = std::env::current_dir()?;
-            let cfg = config::load(&cwd)?;
+            let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => budget::OutputFormat::Json,
                 None => budget::OutputFormat::Text,
@@ -176,7 +172,7 @@ fn main() -> Result<()> {
             format,
         } => {
             let cwd = std::env::current_dir()?;
-            let cfg = config::load(&cwd)?;
+            let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => lint::OutputFormat::Json,
                 None => lint::OutputFormat::Text,

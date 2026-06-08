@@ -53,6 +53,56 @@ pub struct ArtefactRefs {
 }
 
 impl ArtefactRefs {
+    /// Buckets a `ParsedRefs` into categorised, sorted, de-duplicated ref lists.
+    pub fn from_parsed(refs: &crate::refs::ParsedRefs) -> Self {
+        use crate::refs::RefKind;
+
+        let mut paths: Vec<String> = refs
+            .typed
+            .iter()
+            .filter(|r| r.kind == RefKind::Ref)
+            .map(|r| r.value.clone())
+            .chain(refs.links.iter().filter(|l| !l.is_url).map(|l| l.target.clone()))
+            .collect();
+        paths.sort();
+        paths.dedup();
+
+        let mut commands: Vec<String> = refs
+            .typed
+            .iter()
+            .filter(|r| r.kind == RefKind::Cmd)
+            .map(|r| r.value.clone())
+            .collect();
+        commands.sort();
+        commands.dedup();
+
+        let mut skills: Vec<String> = refs
+            .typed
+            .iter()
+            .filter(|r| r.kind == RefKind::Skill)
+            .map(|r| r.value.clone())
+            .collect();
+        skills.sort();
+        skills.dedup();
+
+        let mut urls: Vec<String> = refs
+            .links
+            .iter()
+            .filter(|l| l.is_url)
+            .map(|l| l.target.clone())
+            .collect();
+        urls.sort();
+        urls.dedup();
+
+        Self {
+            paths,
+            commands,
+            skills,
+            urls,
+            agents: vec![],
+        }
+    }
+
     /// Returns `true` when all ref lists are empty.
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()

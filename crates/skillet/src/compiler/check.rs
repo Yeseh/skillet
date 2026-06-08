@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use crate::compiler::{
     PanSource,
+    compile::body_start_offset,
     parse::{Node, PanParse, RefKind},
 };
 use crate::workspace::{self, Workspace};
@@ -21,9 +22,31 @@ pub enum Severity {
     Warning,
 }
 
-/// A diagnostic produced by [`check`].
+/// The category of referential-integrity problem a [`CheckDiag`] describes.
+///
+/// Callers (e.g. the lint engine) use this to attach a stable rule identifier
+/// instead of pattern-matching on the human-readable message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckKind {
+    /// A `{> fragment <}` include that is missing or cannot be expanded.
+    Fragment,
+    /// A `ref::` path that does not exist in the skill directory.
+    PathRef,
+    /// A `cmd::` command not found on PATH.
+    Command,
+    /// A `skill::` reference to an unknown skill.
+    Skill,
+    /// A `var::` reference not declared in `[vars]`.
+    Var,
+    /// An `env::` reference not declared in `[env]`.
+    Env,
+}
+
+/// A diagnostic produced by [`check_source_file`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckDiag {
+    /// Category of the problem.
+    pub kind: CheckKind,
     /// Severity of the diagnostic.
     pub severity: Severity,
     /// Human-readable description of the problem.
@@ -39,7 +62,7 @@ pub struct CheckDiag {
 /// `known_files` is the set of relative paths under the artifact's source
 /// directory used to validate `ref::` targets.  Pass an empty set to skip
 /// that check (e.g. for agents).
-pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) -> Vec<CheckDiag> {
+pub fn check_source_file(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) -> Vec<CheckDiag> {
     let raw = source.as_str();
     let body_offset = body_start_offset(raw);
     let body = &raw[body_offset..];
@@ -60,6 +83,7 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                 let col = loc.column;
                 if let Some(reason) = ws.fragments.poisoned.get(id) {
                     diags.push(CheckDiag {
+                        kind: CheckKind::Fragment,
                         severity: Severity::Error,
                         message: format!("cannot expand fragment '{}': {}", id, reason),
                         line,
@@ -67,6 +91,7 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                     });
                 } else if !ws.fragments.rendered.contains_key(id) {
                     diags.push(CheckDiag {
+                        kind: CheckKind::Fragment,
                         severity: Severity::Error,
                         message: format!("fragment '{}' not found", id),
                         line,
@@ -82,6 +107,7 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                     RefKind::Reference => {
                         if !known_files.is_empty() && !known_files.contains(value.as_str()) {
                             diags.push(CheckDiag {
+                                kind: CheckKind::PathRef,
                                 severity: Severity::Error,
                                 message: format!("ref path not found: '{}'", value),
                                 line,
@@ -91,8 +117,9 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                     }
                     RefKind::Cmd => {
                         let cmd = value.split_whitespace().next().unwrap_or(value.as_str());
-                        if !workspace::is_on_path(cmd) {
+                        if !ws.allowed_commands.contains(cmd) && !workspace::is_on_path(cmd) {
                             diags.push(CheckDiag {
+                                kind: CheckKind::Command,
                                 severity: Severity::Warning,
                                 message: format!("command '{}' not found on PATH", cmd),
                                 line,
@@ -103,6 +130,7 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                     RefKind::Skill => {
                         if !ws.skills.is_empty() && !ws.skills.contains_key(value.as_str()) {
                             diags.push(CheckDiag {
+                                kind: CheckKind::Skill,
                                 severity: Severity::Error,
                                 message: format!("skill '{}' not found in workspace", value),
                                 line,
@@ -113,6 +141,7 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                     RefKind::Var => {
                         if !ws.vars.contains_key(value.as_str()) {
                             diags.push(CheckDiag {
+                                kind: CheckKind::Var,
                                 severity: Severity::Error,
                                 message: format!("var '{}' not declared in [vars]", value),
                                 line,
@@ -123,6 +152,7 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
                     RefKind::Env => {
                         if !ws.env.contains_key(value.as_str()) {
                             diags.push(CheckDiag {
+                                kind: CheckKind::Env,
                                 severity: Severity::Error,
                                 message: format!("env '{}' not declared in [env]", value),
                                 line,
@@ -140,16 +170,3 @@ pub fn check(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) 
     diags
 }
 
-fn body_start_offset(raw: &str) -> usize {
-    if !raw.starts_with("---") {
-        return 0;
-    }
-    let rest = &raw[3..];
-    if let Some(close) = rest.find("\n---") {
-        let after_dash = &rest[close + 4..];
-        let skip = after_dash.find('\n').map(|i| i + 1).unwrap_or(after_dash.len());
-        3 + close + 4 + skip
-    } else {
-        0
-    }
-}

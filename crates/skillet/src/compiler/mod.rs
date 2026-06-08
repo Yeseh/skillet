@@ -9,10 +9,9 @@ pub mod compile;
 pub mod lex;
 /// Parser for `.pan` syntax.
 pub mod parse;
+/// Diagnostics for `.pan` files
+pub mod check;
 
-use std::path::{Path};
-
-use crate::workspace::artefact::Artefact;
 
 /// A 1-based line/column location within a source string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +29,7 @@ pub struct PanSource {
     /// Original source content.
     pub src: Box<str>,
     /// Byte offsets of the first character of each line.
-    pub offsets: Vec<u32>,
+    pub(crate) offsets: Vec<u32>,
 }
 
 impl PanSource {
@@ -50,21 +49,6 @@ impl PanSource {
             src: src.into_boxed_str(),
             offsets,
         }
-    }
-
-    /// Loads source content from an [`Artefact`]'s source path.
-    pub fn from_artefact(artefact: Artefact) -> std::io::Result<Self> {
-        Self::from_path(&artefact.source_path)
-    }
-
-    /// Loads a source file from disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns any I/O error from reading the file.
-    pub fn from_path(path: &Path) -> std::io::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        Ok(Self::new(content))
     }
 
     /// Returns the original source text.

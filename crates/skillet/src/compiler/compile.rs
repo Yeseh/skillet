@@ -113,7 +113,7 @@ pub fn compile(ws: &Workspace, source: &PanSource) -> CompileOutput {
     let activation_tokens = crate::tokens::count_tokens(&full_text, &ws.tokenizer);
 
     let discovery_tokens = {
-        let fm = crate::parse::parse_frontmatter(source.as_str()).ok().flatten();
+        let fm = crate::frontmatter::parse_frontmatter(source.as_str()).ok().flatten();
         let text = fm
             .map(|f| {
                 format!(

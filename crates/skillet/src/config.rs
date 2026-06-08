@@ -1,7 +1,9 @@
 //! Configuration types for `skillet.toml`.
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
 /// Directory layout for the skillet workspace.
 #[non_exhaustive]
@@ -103,6 +105,18 @@ impl SkilletConfig {
     /// Serializes this configuration to a pretty-printed TOML string.
     pub fn to_toml(&self) -> anyhow::Result<String> {
         Ok(toml::to_string_pretty(self)?)
+    }
+
+    /// Loads `skillet.toml` from the given workspace root.
+    pub fn load(workspace: &Path) -> anyhow::Result<Self> {
+        let toml_path = workspace.join("skillet.toml");
+        let raw = std::fs::read_to_string(&toml_path).with_context(|| {
+            format!(
+                "cannot read {}: workspace not initialized (run `skillet init` first)",
+                toml_path.display()
+            )
+        })?;
+        toml::from_str(&raw).context("failed to parse skillet.toml")
     }
 }
 

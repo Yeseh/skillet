@@ -5,10 +5,9 @@
 //! exhaustive comparison.  MinHash signatures are cached in the lockfile and
 //! reused when a skill's compiled output is unchanged.
 
-use crate::lint::LintContext;
 use crate::lockfile::Lockfile;
 
-use super::{Diagnostic, Severity};
+use super::{CompiledSkill, Diagnostic, Severity};
 
 // ── Detection constants ───────────────────────────────────────────────────────
 
@@ -33,7 +32,10 @@ const ROWS: usize = 8;
 /// Returns `(diagnostics, updated_signatures)` where `updated_signatures`
 /// holds `(skill_name, minhash)` entries that were recomputed and should be
 /// written back to the lockfile.
-pub fn check(lockfile: &Lockfile, ctx: &LintContext) -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
+pub fn check(
+    compiled: &[CompiledSkill],
+    lockfile: &Lockfile,
+) -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
     // Collect (skill_name, text, minhash_opt) for skills with a compiled output.
     struct SkillData<'a> {
         name: &'a str,
@@ -45,11 +47,14 @@ pub fn check(lockfile: &Lockfile, ctx: &LintContext) -> (Vec<Diagnostic>, Vec<(S
     let mut skill_data: Vec<SkillData> = Vec::new();
     let mut updated_sigs: Vec<(String, Vec<u64>)> = Vec::new();
 
-    for (name, text) in &ctx.compiled_texts {
+    for cs in compiled {
+        let text = cs.output.text.as_str();
+        let name = cs.name.as_str();
+
         // Try to load cached signature from lockfile.
         let cached = lockfile
             .skills
-            .get(name.as_str())
+            .get(name)
             .filter(|e| !e.minhash.is_empty())
             .map(|e| e.minhash.clone());
 
@@ -333,28 +338,35 @@ fn overlap_ratio(a: &str, b: &str) -> f64 {
 mod tests {
     use super::*;
     use crate::lockfile::Lockfile;
-    use std::collections::HashMap;
 
-    fn make_ctx(skills: &[(&str, &str)]) -> LintContext {
-        let mut compiled_texts = HashMap::new();
-        for (name, text) in skills {
-            compiled_texts.insert(name.to_string(), text.to_string());
-        }
-        LintContext {
-            compiled_texts,
-            ..Default::default()
-        }
+    fn make_scanned(skills: &[(&str, &str)]) -> Vec<CompiledSkill> {
+        use crate::compiler::compile::CompileOutput;
+        skills
+            .iter()
+            .map(|(name, text)| CompiledSkill {
+                name: name.to_string(),
+                source_path: std::path::PathBuf::new(),
+                raw: String::new(),
+                check_diags: vec![],
+                output: CompileOutput {
+                    text: text.to_string(),
+                    fragments_used: vec![],
+                    activation_tokens: 0,
+                    discovery_tokens: 0,
+                },
+            })
+            .collect()
     }
 
     const SHARED: &str = "First sentence here. Second sentence here. Third sentence here.";
 
     #[test]
     fn detects_cross_skill_duplication() {
-        let ctx = make_ctx(&[
+        let scanned = make_scanned(&[
             ("alpha", &format!("# Alpha\n\n{SHARED}\n")),
             ("beta", &format!("# Beta\n\n{SHARED}\n")),
         ]);
-        let (diags, _sigs) = check(&Lockfile::default(), &ctx);
+        let (diags, _sigs) = check(&scanned, &Lockfile::default());
         assert!(
             diags.iter().any(|d| d.rule == "duplication"
                 && d.severity == Severity::Warning
@@ -368,14 +380,14 @@ mod tests {
 
     #[test]
     fn no_warning_for_single_skill_repetition() {
-        let ctx = make_ctx(&[("solo", &format!("# Solo\n\n{SHARED}\n\n{SHARED}\n"))]);
-        let (diags, _) = check(&Lockfile::default(), &ctx);
+        let scanned = make_scanned(&[("solo", &format!("# Solo\n\n{SHARED}\n\n{SHARED}\n"))]);
+        let (diags, _) = check(&scanned, &Lockfile::default());
         assert!(diags.is_empty());
     }
 
     #[test]
     fn no_warning_when_passage_unique_per_skill() {
-        let ctx = make_ctx(&[
+        let scanned = make_scanned(&[
             (
                 "alpha",
                 "# Alpha\n\nOnly in alpha. Unique text here. Nothing shared with beta.",
@@ -385,7 +397,7 @@ mod tests {
                 "# Beta\n\nOnly in beta. Different content. Completely separate.",
             ),
         ]);
-        let (diags, _) = check(&Lockfile::default(), &ctx);
+        let (diags, _) = check(&scanned, &Lockfile::default());
         assert!(diags.is_empty());
     }
 
@@ -393,8 +405,8 @@ mod tests {
     fn overlapping_windows_collapsed_to_single_diagnostic() {
         let content = "Sentence one here. Sentence two here. Sentence three here. \
                        Sentence four here. Sentence five here.";
-        let ctx = make_ctx(&[("alpha", content), ("beta", content)]);
-        let (diags, _) = check(&Lockfile::default(), &ctx);
+        let scanned = make_scanned(&[("alpha", content), ("beta", content)]);
+        let (diags, _) = check(&scanned, &Lockfile::default());
         assert_eq!(
             diags.len(),
             1,
@@ -404,12 +416,12 @@ mod tests {
 
     #[test]
     fn three_skills_sharing_same_passage_emit_one_diagnostic() {
-        let ctx = make_ctx(&[
+        let scanned = make_scanned(&[
             ("alpha", &format!("# A\n\n{SHARED}\n")),
             ("beta", &format!("# B\n\n{SHARED}\n")),
             ("gamma", &format!("# C\n\n{SHARED}\n")),
         ]);
-        let (diags, _) = check(&Lockfile::default(), &ctx);
+        let (diags, _) = check(&scanned, &Lockfile::default());
         assert_eq!(
             diags.len(),
             1,
@@ -424,11 +436,11 @@ mod tests {
 
     #[test]
     fn returns_updated_signatures_for_uncached_skills() {
-        let ctx = make_ctx(&[
+        let scanned = make_scanned(&[
             ("alpha", &format!("# Alpha\n\n{SHARED}\n")),
             ("beta", &format!("# Beta\n\n{SHARED}\n")),
         ]);
-        let (_diags, sigs) = check(&Lockfile::default(), &ctx);
+        let (_diags, sigs) = check(&scanned, &Lockfile::default());
         // Both skills should have signatures to cache.
         assert_eq!(sigs.len(), 2);
         assert!(sigs.iter().any(|(name, _)| name == "alpha"));
@@ -437,13 +449,13 @@ mod tests {
 
     #[test]
     fn reuses_cached_signatures_from_lockfile() {
-        let ctx = make_ctx(&[
+        let scanned = make_scanned(&[
             ("alpha", &format!("# Alpha\n\n{SHARED}\n")),
             ("beta", &format!("# Beta\n\n{SHARED}\n")),
         ]);
 
         // First run — compute and cache.
-        let (_diags, sigs) = check(&Lockfile::default(), &ctx);
+        let (_diags, sigs) = check(&scanned, &Lockfile::default());
 
         // Build a lockfile with cached signatures.
         let mut lf = Lockfile::default();
@@ -464,7 +476,7 @@ mod tests {
         }
 
         // Second run — should reuse cached sigs (no new sigs returned).
-        let (_diags2, new_sigs) = check(&lf, &ctx);
+        let (_diags2, new_sigs) = check(&scanned, &lf);
         assert!(
             new_sigs.is_empty(),
             "no new signatures should be computed when cache is warm"

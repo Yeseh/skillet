@@ -9,8 +9,6 @@
 //! - **Fragments** — `.fragment.pan` files under `{fragments_dir}/`
 //! 
 
-/// Artefact type definitions.
-pub mod artefact;
 /// Skill, Script, and Reference type definitions.
 pub mod skill;
 
@@ -63,6 +61,8 @@ pub struct Workspace {
     pub vars: BTreeMap<String, String>,
     /// Declared environment variables with defaults from `[env]`.
     pub env: BTreeMap<String, EnvVar>,
+    /// Commands treated as available regardless of PATH (`allowed_commands`).
+    pub allowed_commands: HashSet<String>,
     /// Tiktoken encoding name used for all token counting.
     pub tokenizer: String,
 }
@@ -110,6 +110,7 @@ impl Workspace {
             fragment_tokens,
             vars: cfg.vars.clone(),
             env: cfg.env.clone(),
+            allowed_commands: cfg.allowed_commands.clone(),
             tokenizer: cfg.build.tokenizer.clone(),
         })
     }
@@ -137,6 +138,11 @@ impl Workspace {
     /// Returns relative paths of all reference files within a skill's `references/` directory.
     pub fn get_references_for_skill(&self, skill: &Skill) -> HashSet<String> {
         self.child_files_for_skill(skill, Some(Path::new("references")))
+    }
+
+    /// Returns relative paths (slash-normalised) of every file under the skill's source dir.
+    pub fn get_source_files_for_skill(&self, skill: &Skill) -> HashSet<String> {
+        self.child_files_for_skill(skill, None)
     }
 
     /// Returns relative file paths within a skill's directory.

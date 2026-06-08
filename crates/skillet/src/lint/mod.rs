@@ -1,60 +1,72 @@
 //! Lint engine for skill quality validation.
 //!
-//! The engine runs a three-phase pipeline:
+//! Lint is an aggregator over the existing pipeline stages rather than a
+//! reimplementation of them.  For every target skill it runs, in order:
 //!
-//! 1. **Phase 1** — Parallel source scan: reads every file, hashes it, counts
-//!    tokens, and parses frontmatter.
-//! 2. **Phase 2** — Parallel ref extraction: extracts all typed refs, markdown
-//!    links, and untyped backticks from the in-memory file content.
-//! 3. **Phase 3** — Parallel rule execution: runs per-skill rules (branch A)
-//!    and workspace rules (branch B) concurrently via `rayon::join`.
+//! 1. [`check_source_file`](crate::compiler::check::check_source_file) —
+//!    referential integrity (broken `ref::`/`skill::`/`var::`/`env::`/`cmd::`
+//!    and fragment includes).
+//! 2. [`compile`](crate::compiler::compile::compile) — produces the compiled
+//!    text plus `fragments_used`, `activation_tokens`, and `discovery_tokens`.
 //!
-//! Individual rule implementations live in the `rules` submodule — one file
-//! per rule (or closely-related rule group).
+//! Workspace freshness (`stale-build`) is delegated to
+//! [`freshness::verify`](crate::freshness::verify) — the same logic behind
+//! `skillet check`.  Only the genuinely lint-specific concerns
+//! (frontmatter validity, untyped-backtick hints, size budgets, unused
+//! fragments, cross-skill duplication) live in the `rules` submodule.
 
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
-pub mod pipeline;
+use rayon::prelude::*;
+
+use crate::compiler::check::{check_source_file, CheckDiag, CheckKind};
+use crate::compiler::compile::{compile, CompileOutput};
+use crate::compiler::PanSource;
+use crate::config::SkilletConfig;
+use crate::freshness;
+use crate::lockfile::Lockfile;
+use crate::workspace::{Skill, Workspace};
+
 /// Individual lint rule implementations.
 pub mod rules;
 
-// ── LintContext ───────────────────────────────────────────────────────────────
+// ── Compiled skill ──────────────────────────────────────────────────────────────
 
-/// Pre-loaded workspace state for lint rule execution.
-/// Built by the CLI; consumed by pure rule functions.
-#[derive(Debug, Default)]
-pub struct LintContext {
-    /// Files known to exist relative to each skill dir.
-    /// Key: skill name, Value: set of relative paths.
-    pub skill_files: HashMap<String, HashSet<String>>,
+/// One skill carried through `check` and `compile`, ready for the lint rules.
+///
+/// This is the lint engine's view of a skill: the raw source plus the outputs
+/// of the shared pipeline stages.  No hashing, tokenizing, or ref extraction is
+/// duplicated here — those come from [`compile`] and [`check_source_file`].
+pub struct CompiledSkill {
+    /// Skill name (directory name).
+    pub name: String,
+    /// Absolute path to the `.pan` source file.
+    pub source_path: PathBuf,
+    /// Raw source content (empty if unreadable).
+    pub raw: String,
+    /// Referential-integrity diagnostics from the check stage.
+    pub check_diags: Vec<CheckDiag>,
+    /// Output of the compile stage.
+    pub output: CompileOutput,
+}
 
-    /// Commands confirmed present on PATH.
-    pub known_commands: HashSet<String>,
+fn compile_skill(skill: &Skill, ws: &Workspace) -> CompiledSkill {
+    let raw = std::fs::read_to_string(&skill.source_path).unwrap_or_default();
+    let source = PanSource::new(raw.clone());
 
-    /// Skill directory names that exist in the workspace.
-    pub known_skill_dirs: HashSet<String>,
+    let known_files = ws.get_source_files_for_skill(skill);
+    let check_diags = check_source_file(ws, &source, &known_files);
+    let output = compile(ws, &source);
 
-    /// SHA-256 hash of each compiled SKILL.md (key: skill name).
-    pub compiled_hashes: HashMap<String, String>,
-
-    /// Full text of each compiled SKILL.md (key: skill name).
-    /// Needed by duplication detection.
-    pub compiled_texts: HashMap<String, String>,
-
-    /// SHA-256 hash of each fragment file (key: fragment name).
-    pub fragment_hashes: HashMap<String, String>,
-
-    /// Token count per fragment (key: fragment name).
-    pub fragment_tokens: HashMap<String, u32>,
-
-    /// All fragment names present in the fragments directory.
-    pub fragment_names: Vec<String>,
-
-    /// Activation token count per skill from lockfile (key: skill name).
-    /// Used by oversized rule when lockfile data is available.
-    pub activation_tokens: HashMap<String, u32>,
+    CompiledSkill {
+        name: skill.name.clone(),
+        source_path: skill.source_path.clone(),
+        raw,
+        check_diags,
+        output,
+    }
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -92,7 +104,7 @@ pub struct Diagnostic {
     /// 1-based column number where the issue was found (when known).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub col: Option<u32>,
-    
+
     /// The duplicated passage text (duplication rule only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duplicated_text: Option<String>,
@@ -123,6 +135,8 @@ pub struct LintOptions {
     pub pedantic: bool,
     /// Output format.
     pub format: OutputFormat,
+    /// Single-skill mode: lint only this skill, skipping workspace rules.
+    pub skill: Option<String>,
     /// Single-file mode: lint only this `.pan` file, skipping workspace rules.
     ///
     /// Used by editor integrations (e.g. `skillet lint --file <path>`).
@@ -138,10 +152,177 @@ impl LintOptions {
             strict,
             pedantic,
             format,
+            skill: None,
             file_path: None,
             verbose: false,
         }
     }
+}
+
+/// Result of a [`lint`] run.
+#[derive(Debug, Default)]
+pub struct LintOutput {
+    /// All diagnostics produced, before severity promotion or filtering.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Recomputed MinHash signatures `(skill_name, signature)` that the caller
+    /// should write back to the lockfile.
+    pub updated_minhash: Vec<(String, Vec<u64>)>,
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────────────
+
+/// Runs all lint rules over the resolved [`Workspace`].
+///
+/// Selects target skills from `opts` (single file, single skill, or the whole
+/// workspace), runs `check` + `compile` for each, then runs the lint-specific
+/// rules.  Severity promotion (`--strict`), info filtering (`--pedantic`),
+/// disabled-rule filtering, rendering, and lockfile writeback are the caller's
+/// responsibility.
+pub fn lint(
+    ws: &Workspace,
+    lockfile: &Lockfile,
+    config: &SkilletConfig,
+    opts: &LintOptions,
+) -> LintOutput {
+    let targets: Vec<&Skill> = match (&opts.file_path, &opts.skill) {
+        (Some(path), _) => {
+            let abs = if path.is_absolute() {
+                path.clone()
+            } else {
+                ws.root.join(path)
+            };
+            ws.skills.values().filter(|s| s.source_path == abs).collect()
+        }
+        (None, Some(name)) => ws.skills.values().filter(|s| &s.name == name).collect(),
+        (None, None) => ws.skills.values().collect(),
+    };
+
+    let run_workspace_rules = opts.file_path.is_none() && opts.skill.is_none();
+    let target_names: HashSet<&str> = targets.iter().map(|s| s.name.as_str()).collect();
+
+    let compiled: Vec<CompiledSkill> =
+        targets.par_iter().map(|s| compile_skill(s, ws)).collect();
+
+    // Per-skill rules and workspace rules run concurrently.
+    let (mut diagnostics, (workspace_diags, updated_minhash)) = rayon::join(
+        || -> Vec<Diagnostic> {
+            let skill_names: Vec<&str> = ws.skills.keys().map(|s| s.as_str()).collect();
+            compiled
+                .par_iter()
+                .flat_map(|cs| lint_skill_rules(cs, config, &skill_names))
+                .collect()
+        },
+        || -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
+            if run_workspace_rules {
+                lint_workspace_rules(&compiled, ws, config, lockfile)
+            } else {
+                (vec![], vec![])
+            }
+        },
+    );
+
+    diagnostics.extend(workspace_diags);
+
+    // `stale-build` reuses the freshness verifier (the `skillet check` logic).
+    diagnostics.extend(stale_build_diags(ws, lockfile, config, &target_names, run_workspace_rules));
+
+    LintOutput {
+        diagnostics,
+        updated_minhash,
+    }
+}
+
+fn lint_skill_rules(
+    cs: &CompiledSkill,
+    config: &SkilletConfig,
+    skill_names: &[&str],
+) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    let file_path = cs.source_path.to_string_lossy().to_string();
+
+    diags.extend(rules::invalid_frontmatter::check(&cs.name, &cs.raw));
+
+    // Referential integrity comes straight from the check stage.
+    for d in &cs.check_diags {
+        diags.push(diag_from_check(&cs.name, &file_path, d));
+    }
+
+    diags.extend(rules::untyped_backtick::check(
+        &cs.name,
+        &file_path,
+        &cs.raw,
+        skill_names,
+    ));
+    diags.extend(rules::oversized::check_skill(cs, config));
+    diags.extend(rules::oversized::check_description(cs, config));
+
+    diags
+}
+
+fn lint_workspace_rules(
+    compiled: &[CompiledSkill],
+    ws: &Workspace,
+    config: &SkilletConfig,
+    lockfile: &Lockfile,
+) -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
+    let mut diags = Vec::new();
+    diags.extend(rules::unused_fragment::check(compiled, ws));
+    diags.extend(rules::oversized::check_fragments(ws, config));
+    let (dup_diags, updated_sigs) = rules::duplication::check(compiled, lockfile);
+    diags.extend(dup_diags);
+    (diags, updated_sigs)
+}
+
+/// Maps a referential-integrity [`CheckDiag`] onto a lint [`Diagnostic`],
+/// deriving the rule slug from its [`CheckKind`].
+fn diag_from_check(skill: &str, path: &str, d: &CheckDiag) -> Diagnostic {
+    use crate::compiler::check::Severity as CheckSeverity;
+
+    let rule = match d.kind {
+        CheckKind::Fragment => "stale-fragment-ref",
+        CheckKind::PathRef => "stale-path-ref",
+        CheckKind::Command => "stale-command-ref",
+        CheckKind::Skill => "stale-skill-ref",
+        CheckKind::Var => "stale-var-ref",
+        CheckKind::Env => "stale-env-ref",
+    };
+    let severity = match d.severity {
+        CheckSeverity::Error => Severity::Error,
+        CheckSeverity::Warning => Severity::Warning,
+    };
+    diag_located(
+        severity,
+        skill,
+        rule,
+        d.message.clone(),
+        Some(path.to_string()),
+        Some(d.line),
+        Some(d.col),
+    )
+}
+
+/// Produces `stale-build` diagnostics by delegating to [`freshness::verify`].
+fn stale_build_diags(
+    ws: &Workspace,
+    lockfile: &Lockfile,
+    config: &SkilletConfig,
+    target_names: &HashSet<&str>,
+    run_workspace_rules: bool,
+) -> Vec<Diagnostic> {
+    let fragments_dir = ws.root.join(&config.workspace.fragments_dir);
+    let report = freshness::verify(ws, lockfile, &fragments_dir);
+
+    report
+        .skills
+        .iter()
+        .filter(|r| !r.fresh)
+        .filter(|r| run_workspace_rules || target_names.contains(r.name.as_str()))
+        .flat_map(|r| {
+            r.reasons.iter().map(move |reason| {
+                diag(Severity::Error, &r.name, "stale-build", reason.clone())
+            })
+        })
+        .collect()
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ pub enum RefKind {
 
 /// Parser error categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseErrorKind {
+pub(crate) enum ParseErrorKind {
     /// Source ended unexpectedly.
     UnexpectedEof,
     /// An unexpected token appeared in the stream.
@@ -94,22 +94,20 @@ pub enum Node {
 
 /// A parse error with its source range.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
+pub(crate) struct ParseError {
     /// Byte range where the error occurred.
-    pub range: Range<u32>,
+    pub(crate) range: Range<u32>,
     /// Error category.
-    pub kind: ParseErrorKind,
+    pub(crate) kind: ParseErrorKind,
 }
 
 /// Parser output and metadata for a `.pan` source.
 #[derive(Debug)]
 pub struct PanParse<'a> {
-    /// Original file path when known.
-    pub path: Option<std::path::PathBuf>,
     /// Parsed nodes.
     pub nodes: Vec<Node>,
     /// Collected non-fatal parse errors.
-    pub errors: Vec<ParseError>,
+    pub(crate) errors: Vec<ParseError>,
     src: &'a str,
 }
 
@@ -118,7 +116,6 @@ impl<'a> PanParse<'a> {
     #[must_use]
     pub fn new(pan_source: &'a PanSource) -> Self {
         Self {
-            path: None,
             src: &pan_source.src,
             nodes: Vec::new(),
             errors: Vec::new(),
@@ -250,7 +247,7 @@ impl<'a> PanParse<'a> {
         let text = maybe_text
             .map(|t| self.get_source_string(t))
             .unwrap_or_default();
-        let target = self.get_source_string(&ref_value);
+        let target = self.get_source_string(ref_value);
 
         self.nodes.push(Node::MarkdownLink {
             text,

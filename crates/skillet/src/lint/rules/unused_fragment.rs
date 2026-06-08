@@ -1,37 +1,28 @@
 //! Rule: `unused-fragment` — warns when a fragment is not included by any skill.
 
-use crate::config::SkilletConfig;
-use crate::lint::pipeline::SourceFile;
-use crate::lint::LintContext;
-use regex::Regex;
+use crate::workspace::Workspace;
 use std::collections::HashSet;
-use std::sync::LazyLock;
 
-use super::{diag, Diagnostic, Severity};
+use super::{diag, CompiledSkill, Diagnostic, Severity};
 
-static FRAGMENT_INCLUDE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\{\{>\s*([\w-]+)\s*\}\}").unwrap());
-
-/// Finds unused fragments using the pre-read `raw` content from Phase 1.
-pub fn check(
-    source_files: &[SourceFile],
-    ctx: &LintContext,
-    _config: &SkilletConfig,
-) -> Vec<Diagnostic> {
-    if ctx.fragment_names.is_empty() {
+/// Finds fragments that no skill expands.
+///
+/// Usage is read from each skill's `fragments_used` (produced by the compile
+/// stage), so it tracks exactly what the compiler actually expanded.
+pub fn check(compiled: &[CompiledSkill], ws: &Workspace) -> Vec<Diagnostic> {
+    let fragment_names = ws.fragment_names();
+    if fragment_names.is_empty() {
         return vec![];
     }
 
-    let mut used: HashSet<String> = HashSet::new();
-    for sf in source_files {
-        for caps in FRAGMENT_INCLUDE_RE.captures_iter(&sf.raw) {
-            used.insert(caps[1].to_string());
-        }
-    }
-
-    ctx.fragment_names
+    let used: HashSet<&str> = compiled
         .iter()
-        .filter(|frag_name| !used.contains(frag_name.as_str()))
+        .flat_map(|cs| cs.output.fragments_used.iter().map(|s| s.as_str()))
+        .collect();
+
+    fragment_names
+        .into_iter()
+        .filter(|frag_name| !used.contains(*frag_name))
         .map(|frag_name| {
             diag(
                 Severity::Warning,

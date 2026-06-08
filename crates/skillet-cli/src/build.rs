@@ -8,13 +8,12 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use owo_colors::OwoColorize;
 use serde::Serialize;
-use skillet::check::{CheckDiag, Severity};
+use skillet::compiler::check::{check_source_file, CheckDiag, Severity};
 use skillet::compiler::PanSource;
 use skillet::config::SkilletConfig;
-use skillet::lockfile::{self, ArtefactEntry, ArtefactRefs, FragmentLockEntry, LockMeta, Lockfile};
+use skillet::lockfile::{self, ArtefactEntry, ArtefactRefs, LockMeta, Lockfile};
 use skillet::workspace::{hash_bytes, hash_file, Skill, Workspace};
 use std::path::Path;
-use walkdir::WalkDir;
 
 // ── Build options ──────────────────────────────────────────────────────────────
 
@@ -142,27 +141,14 @@ pub fn run(
 }
 
 fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> Result<()> {
-    use std::collections::HashSet;
-
     let source_content = std::fs::read_to_string(&skill.source_path)
         .with_context(|| format!("failed to read {}", skill.source_path.display()))?;
 
     let pan_source = PanSource::new(source_content);
 
-    let known_files: HashSet<String> = WalkDir::new(&skill.src_dir)
-        .min_depth(1)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| {
-            e.path()
-                .strip_prefix(&skill.src_dir)
-                .ok()
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-        })
-        .collect();
+    let known_files = ws.get_source_files_for_skill(skill);
 
-    let diags = skillet::check::check(ws, &pan_source, &known_files);
+    let diags = check_source_file(ws, &pan_source, &known_files);
 
     for d in &diags {
         eprintln!("{}", render_diag(skill, d));
@@ -184,54 +170,7 @@ fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> 
     let skill_names: Vec<&str> = ws.skills.keys().map(String::as_str).collect();
     let parsed_refs = skillet::refs::ParsedRefs::extract(pan_source.as_str(), &skill_names);
 
-    let refs = ArtefactRefs {
-        paths: {
-            let mut v: Vec<String> = parsed_refs
-                .typed
-                .iter()
-                .filter(|r| r.kind == skillet::refs::RefKind::Ref)
-                .map(|r| r.value.clone())
-                .chain(parsed_refs.links.iter().filter(|l| !l.is_url).map(|l| l.target.clone()))
-                .collect();
-            v.sort();
-            v.dedup();
-            v
-        },
-        commands: {
-            let mut v: Vec<String> = parsed_refs
-                .typed
-                .iter()
-                .filter(|r| r.kind == skillet::refs::RefKind::Cmd)
-                .map(|r| r.value.clone())
-                .collect();
-            v.sort();
-            v.dedup();
-            v
-        },
-        skills: {
-            let mut v: Vec<String> = parsed_refs
-                .typed
-                .iter()
-                .filter(|r| r.kind == skillet::refs::RefKind::Skill)
-                .map(|r| r.value.clone())
-                .collect();
-            v.sort();
-            v.dedup();
-            v
-        },
-        urls: {
-            let mut v: Vec<String> = parsed_refs
-                .links
-                .iter()
-                .filter(|l| l.is_url)
-                .map(|l| l.target.clone())
-                .collect();
-            v.sort();
-            v.dedup();
-            v
-        },
-        agents: vec![],
-    };
+    let refs = ArtefactRefs::from_parsed(&parsed_refs);
 
     let old_minhash = lockfile
         .skills
@@ -280,7 +219,7 @@ fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<(
             lockfile
                 .fragments
                 .entry(frag_name.clone())
-                .or_insert_with(FragmentLockEntry::default)
+                .or_default()
                 .used_by
                 .push(skill_name.clone());
         }

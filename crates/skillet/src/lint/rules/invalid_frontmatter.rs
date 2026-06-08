@@ -1,38 +1,29 @@
 //! Rule: `invalid-frontmatter` — verifies `name` matches directory and `description` is present.
 
-use crate::config::SkilletConfig;
-use crate::lint::pipeline::SourceFile;
+use crate::frontmatter::parse_frontmatter;
 
 use super::{diag, Diagnostic, Severity};
 
-/// Checks frontmatter validity using the pre-parsed data from Phase 1.
-pub fn check(source: &SourceFile, _config: &SkilletConfig) -> Vec<Diagnostic> {
-    // Surface Phase 1 parse errors first.
-    if !source.parse_errors.is_empty() {
-        return source
-            .parse_errors
-            .iter()
-            .map(|e| {
-                diag(
-                    Severity::Error,
-                    &source.name,
-                    "invalid-frontmatter",
-                    format!("failed to parse frontmatter: {e}"),
-                )
-            })
-            .collect();
-    }
-
-    let fm = match source.frontmatter.as_ref() {
-        None => {
+/// Checks frontmatter validity for a skill's raw source.
+pub fn check(name: &str, raw: &str) -> Vec<Diagnostic> {
+    let fm = match parse_frontmatter(raw) {
+        Err(e) => {
             return vec![diag(
                 Severity::Error,
-                &source.name,
+                name,
+                "invalid-frontmatter",
+                format!("failed to parse frontmatter: {e}"),
+            )]
+        }
+        Ok(None) => {
+            return vec![diag(
+                Severity::Error,
+                name,
                 "invalid-frontmatter",
                 "missing frontmatter".into(),
             )]
         }
-        Some(fm) => fm,
+        Ok(Some(fm)) => fm,
     };
 
     let mut diags = Vec::new();
@@ -40,15 +31,15 @@ pub fn check(source: &SourceFile, _config: &SkilletConfig) -> Vec<Diagnostic> {
     match fm.name.as_deref() {
         None => diags.push(diag(
             Severity::Error,
-            &source.name,
+            name,
             "invalid-frontmatter",
             "missing 'name' field".into(),
         )),
-        Some(n) if n != source.name => diags.push(diag(
+        Some(n) if n != name => diags.push(diag(
             Severity::Error,
-            &source.name,
+            name,
             "invalid-frontmatter",
-            format!("name '{}' does not match directory '{}'", n, source.name),
+            format!("name '{}' does not match directory '{}'", n, name),
         )),
         _ => {}
     }
@@ -61,7 +52,7 @@ pub fn check(source: &SourceFile, _config: &SkilletConfig) -> Vec<Diagnostic> {
     {
         diags.push(diag(
             Severity::Error,
-            &source.name,
+            name,
             "invalid-frontmatter",
             "missing or empty 'description' field".into(),
         ));

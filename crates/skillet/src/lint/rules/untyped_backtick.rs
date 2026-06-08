@@ -1,27 +1,30 @@
 //! Rule: `untyped-backtick` — nudges authors toward explicit ref annotations.
 
-use crate::lint::pipeline::SourceFile;
+use crate::refs::ParsedRefs;
 
 use super::{diag_located, Diagnostic, Severity};
 
-/// Emits info diagnostics for untyped backticks using pre-extracted data from Phase 2.
-pub fn check(source: &SourceFile) -> Vec<Diagnostic> {
-    let file_path = source.source_path.to_string_lossy().to_string();
+/// Emits info diagnostics for untyped backticks that look like refs.
+///
+/// This is a lint-only heuristic (the compiler treats untyped backticks as
+/// literal text), so it extracts the untyped refs itself via [`ParsedRefs`].
+/// `skill_names` lets the classifier recognise cross-skill references.
+pub fn check(name: &str, file_path: &str, raw: &str, skill_names: &[&str]) -> Vec<Diagnostic> {
+    let parsed = ParsedRefs::extract(raw, skill_names);
 
-    source
-        .parsed_refs
+    parsed
         .untyped
         .iter()
         .map(|u| {
             diag_located(
                 Severity::Info,
-                &source.name,
+                name,
                 "untyped-backtick",
                 format!(
                     "`{}` looks like a {} — consider `{}::{}`",
                     u.content, u.inferred_kind, u.inferred_kind, u.content
                 ),
-                Some(file_path.clone()),
+                Some(file_path.to_string()),
                 Some(u.line),
                 Some(u.col),
             )

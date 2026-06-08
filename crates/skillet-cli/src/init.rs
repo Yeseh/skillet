@@ -22,11 +22,12 @@ pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
         );
     }
 
-    let default_cfg = skillet::config::SkilletConfig::default().to_toml()?;
+    let cfg = skillet::config::SkilletConfig::default();
+    let default_cfg = cfg.to_toml()?;
 
-    let skills_src_dir = workspace.join("src/skills");
-    let skills_out_dir = workspace.join("skills");
-    let fragments_dir = workspace.join("src/skills/_fragments");
+    let skills_src_dir = workspace.join(&cfg.workspace.src_dir);
+    let skills_out_dir = workspace.join(&cfg.workspace.out_dir);
+    let fragments_dir = workspace.join(&cfg.workspace.fragments_dir);
 
     if adopt {
         adopt_skills(&skills_out_dir, &skills_src_dir).context("failed to adopt SKILL.md files")?;
