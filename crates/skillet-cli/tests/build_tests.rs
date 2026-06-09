@@ -90,7 +90,7 @@ fn build_expands_fragment_includes_in_output() {
     let output = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
     assert!(output.contains("## Shared Note"));
     assert!(output.contains("fragment content here"));
-    assert!(!output.contains("{{> note }}"));
+    assert!(!output.contains("{> note <}"));
 }
 
 #[test]

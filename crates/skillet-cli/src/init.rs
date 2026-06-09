@@ -133,7 +133,11 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
                     .with_context(|| format!("failed to create {}", parent.display()))?;
             }
             std::fs::copy(path, &dest_file).with_context(|| {
-                format!("failed to copy {} to {}", path.display(), dest_file.display())
+                format!(
+                    "failed to copy {} to {}",
+                    path.display(),
+                    dest_file.display()
+                )
             })?;
         }
     }

@@ -14,4 +14,4 @@ Use this skill when asked to review a pull request or a code snippet.
 3. Leave clear, actionable inline comments with suggested fixes where possible.
 4. Summarise your findings at the end with an overall verdict.
 
-{{> safety-note }}
+{> safety-note <}

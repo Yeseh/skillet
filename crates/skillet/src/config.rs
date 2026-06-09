@@ -70,7 +70,7 @@ pub struct SkilletConfig {
     pub env: BTreeMap<String, EnvVar>,
     /// The allowed commands
     #[serde(default)]
-    pub allowed_commands: HashSet<String>
+    pub allowed_commands: HashSet<String>,
 }
 
 impl Default for SkilletConfig {
@@ -96,7 +96,7 @@ impl Default for SkilletConfig {
             },
             vars,
             env,
-            allowed_commands: HashSet::default()
+            allowed_commands: HashSet::default(),
         }
     }
 }
@@ -179,10 +179,7 @@ mod tests {
             parsed["workspace"]["src_dir"].as_str().unwrap(),
             "src/skills"
         );
-        assert_eq!(
-            parsed["workspace"]["out_dir"].as_str().unwrap(),
-            "skills"
-        );
+        assert_eq!(parsed["workspace"]["out_dir"].as_str().unwrap(), "skills");
         assert_eq!(
             parsed["build"]["tokenizer"].as_str().unwrap(),
             "cl100k_base"

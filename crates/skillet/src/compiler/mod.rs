@@ -4,14 +4,13 @@
 //! within `skillet`, preserving its lexer/parser split while making the API
 //! available as `skillet::compiler`.
 
+/// Diagnostics for `.pan` files
+pub mod check;
 pub mod compile;
 /// Lexer for `.pan` syntax.
 pub mod lex;
 /// Parser for `.pan` syntax.
 pub mod parse;
-/// Diagnostics for `.pan` files
-pub mod check;
-
 
 /// A 1-based line/column location within a source string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

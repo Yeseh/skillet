@@ -62,7 +62,12 @@ impl ArtefactRefs {
             .iter()
             .filter(|r| r.kind == RefKind::Ref)
             .map(|r| r.value.clone())
-            .chain(refs.links.iter().filter(|l| !l.is_url).map(|l| l.target.clone()))
+            .chain(
+                refs.links
+                    .iter()
+                    .filter(|l| !l.is_url)
+                    .map(|l| l.target.clone()),
+            )
             .collect();
         paths.sort();
         paths.dedup();

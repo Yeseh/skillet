@@ -40,10 +40,7 @@ fn init_creates_skills_dir_fragments_dir_and_config() {
         parsed["workspace"]["src_dir"].as_str().unwrap(),
         "src/skills"
     );
-    assert_eq!(
-        parsed["workspace"]["out_dir"].as_str().unwrap(),
-        "skills"
-    );
+    assert_eq!(parsed["workspace"]["out_dir"].as_str().unwrap(), "skills");
     assert_eq!(
         parsed["workspace"]["fragments_dir"].as_str().unwrap(),
         "src/skills/_fragments"

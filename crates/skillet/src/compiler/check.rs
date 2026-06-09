@@ -7,9 +7,9 @@
 use std::collections::HashSet;
 
 use crate::compiler::{
-    PanSource,
     compile::body_start_offset,
     parse::{Node, PanParse, RefKind},
+    PanSource,
 };
 use crate::workspace::{self, Workspace};
 
@@ -62,7 +62,11 @@ pub struct CheckDiag {
 /// `known_files` is the set of relative paths under the artifact's source
 /// directory used to validate `ref::` targets.  Pass an empty set to skip
 /// that check (e.g. for agents).
-pub fn check_source_file(ws: &Workspace, source: &PanSource, known_files: &HashSet<String>) -> Vec<CheckDiag> {
+pub fn check_source_file(
+    ws: &Workspace,
+    source: &PanSource,
+    known_files: &HashSet<String>,
+) -> Vec<CheckDiag> {
     let raw = source.as_str();
     let body_offset = body_start_offset(raw);
     let body = &raw[body_offset..];
@@ -76,7 +80,10 @@ pub fn check_source_file(ws: &Workspace, source: &PanSource, known_files: &HashS
 
     for node in &parser.nodes {
         match node {
-            Node::Fragment { value, source_range } => {
+            Node::Fragment {
+                value,
+                source_range,
+            } => {
                 let id = value.trim();
                 let loc = body_source.location_at(source_range.start);
                 let line = loc.line + fm_line_offset;
@@ -99,7 +106,11 @@ pub fn check_source_file(ws: &Workspace, source: &PanSource, known_files: &HashS
                     });
                 }
             }
-            Node::Ref { kind, value, source_range } => {
+            Node::Ref {
+                kind,
+                value,
+                source_range,
+            } => {
                 let loc = body_source.location_at(source_range.start);
                 let line = loc.line + fm_line_offset;
                 let col = loc.column;
@@ -169,4 +180,3 @@ pub fn check_source_file(ws: &Workspace, source: &PanSource, known_files: &HashS
 
     diags
 }
-

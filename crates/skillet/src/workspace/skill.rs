@@ -44,7 +44,6 @@ pub struct Script {
     pub absolute_path: PathBuf,
 }
 
-
 /// A reference `.pan` file associated with a skill.
 /// References can be .pan files or .md, should be compiled when .pan OR (.md and parse_md option is true)
 #[derive(Debug, Clone)]

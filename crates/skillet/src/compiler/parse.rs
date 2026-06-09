@@ -186,11 +186,7 @@ impl<'a> PanParse<'a> {
         }
     }
 
-    fn make_link_node(
-        &mut self,
-        token_iter: &mut Peekable<Iter<'_, Token>>,
-        start: u32,
-    ) {
+    fn make_link_node(&mut self, token_iter: &mut Peekable<Iter<'_, Token>>, start: u32) {
         // Expected sequence after BracketOpen:
         //   (BodyText?) BracketClose ParenOpen RefValue ParenClose
 
@@ -201,40 +197,70 @@ impl<'a> PanParse<'a> {
         };
 
         // BracketClose is required.
-        if token_iter.peek().is_none_or(|t| t.kind != TokenKind::BracketClose) {
-            self.nodes.push(Node::Body { source_range: start..start + 1 });
+        if token_iter
+            .peek()
+            .is_none_or(|t| t.kind != TokenKind::BracketClose)
+        {
+            self.nodes.push(Node::Body {
+                source_range: start..start + 1,
+            });
             if let Some(text_tok) = maybe_text {
-                self.nodes.push(Node::Body { source_range: text_tok.range.clone() });
+                self.nodes.push(Node::Body {
+                    source_range: text_tok.range.clone(),
+                });
             }
             return;
         }
         let bracket_close = token_iter.next().expect("BracketClose exists after peek");
 
         // ParenOpen is required for a link; without it, emit everything as body.
-        if token_iter.peek().is_none_or(|t| t.kind != TokenKind::ParenOpen) {
-            self.nodes.push(Node::Body { source_range: start..start + 1 });
+        if token_iter
+            .peek()
+            .is_none_or(|t| t.kind != TokenKind::ParenOpen)
+        {
+            self.nodes.push(Node::Body {
+                source_range: start..start + 1,
+            });
             if let Some(text_tok) = maybe_text {
-                self.nodes.push(Node::Body { source_range: text_tok.range.clone() });
+                self.nodes.push(Node::Body {
+                    source_range: text_tok.range.clone(),
+                });
             }
-            self.nodes.push(Node::Body { source_range: bracket_close.range.clone() });
+            self.nodes.push(Node::Body {
+                source_range: bracket_close.range.clone(),
+            });
             return;
         }
         let paren_open = token_iter.next().expect("ParenOpen exists after peek");
 
         // RefValue (the link target) always follows ParenOpen from the lexer.
-        if token_iter.peek().is_none_or(|t| t.kind != TokenKind::RefValue) {
-            self.nodes.push(Node::Body { source_range: start..start + 1 });
+        if token_iter
+            .peek()
+            .is_none_or(|t| t.kind != TokenKind::RefValue)
+        {
+            self.nodes.push(Node::Body {
+                source_range: start..start + 1,
+            });
             if let Some(text_tok) = maybe_text {
-                self.nodes.push(Node::Body { source_range: text_tok.range.clone() });
+                self.nodes.push(Node::Body {
+                    source_range: text_tok.range.clone(),
+                });
             }
-            self.nodes.push(Node::Body { source_range: bracket_close.range.clone() });
-            self.nodes.push(Node::Body { source_range: paren_open.range.clone() });
+            self.nodes.push(Node::Body {
+                source_range: bracket_close.range.clone(),
+            });
+            self.nodes.push(Node::Body {
+                source_range: paren_open.range.clone(),
+            });
             return;
         }
         let ref_value = token_iter.next().expect("RefValue exists after peek");
 
         // ParenClose is required.
-        if token_iter.peek().is_none_or(|t| t.kind != TokenKind::ParenClose) {
+        if token_iter
+            .peek()
+            .is_none_or(|t| t.kind != TokenKind::ParenClose)
+        {
             self.errors.push(ParseError {
                 kind: ParseErrorKind::UnclosedRef,
                 range: start..ref_value.range.end,

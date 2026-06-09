@@ -191,7 +191,10 @@ pub fn lint(
             } else {
                 ws.root.join(path)
             };
-            ws.skills.values().filter(|s| s.source_path == abs).collect()
+            ws.skills
+                .values()
+                .filter(|s| s.source_path == abs)
+                .collect()
         }
         (None, Some(name)) => ws.skills.values().filter(|s| &s.name == name).collect(),
         (None, None) => ws.skills.values().collect(),
@@ -200,8 +203,7 @@ pub fn lint(
     let run_workspace_rules = opts.file_path.is_none() && opts.skill.is_none();
     let target_names: HashSet<&str> = targets.iter().map(|s| s.name.as_str()).collect();
 
-    let compiled: Vec<CompiledSkill> =
-        targets.par_iter().map(|s| compile_skill(s, ws)).collect();
+    let compiled: Vec<CompiledSkill> = targets.par_iter().map(|s| compile_skill(s, ws)).collect();
 
     // Per-skill rules and workspace rules run concurrently.
     let (mut diagnostics, (workspace_diags, updated_minhash)) = rayon::join(
@@ -224,7 +226,13 @@ pub fn lint(
     diagnostics.extend(workspace_diags);
 
     // `stale-build` reuses the freshness verifier (the `skillet check` logic).
-    diagnostics.extend(stale_build_diags(ws, lockfile, config, &target_names, run_workspace_rules));
+    diagnostics.extend(stale_build_diags(
+        ws,
+        lockfile,
+        config,
+        &target_names,
+        run_workspace_rules,
+    ));
 
     LintOutput {
         diagnostics,
@@ -318,9 +326,9 @@ fn stale_build_diags(
         .filter(|r| !r.fresh)
         .filter(|r| run_workspace_rules || target_names.contains(r.name.as_str()))
         .flat_map(|r| {
-            r.reasons.iter().map(move |reason| {
-                diag(Severity::Error, &r.name, "stale-build", reason.clone())
-            })
+            r.reasons
+                .iter()
+                .map(move |reason| diag(Severity::Error, &r.name, "stale-build", reason.clone()))
         })
         .collect()
 }

@@ -63,18 +63,15 @@ pub fn run(
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
-
     let ws = Workspace::resolve(workspace_path, cfg)?;
 
     // TODO create single artefact type, so we can iterate and compile everything
 
     let targets: Vec<&Skill> = match skill_name {
-        Some(name) => {
-            match ws.skills.get(name) {
-                Some(s) => vec![s],
-                None => bail!("skill '{}' not found in workspace", name),
-            }
-        }
+        Some(name) => match ws.skills.get(name) {
+            Some(s) => vec![s],
+            None => bail!("skill '{}' not found in workspace", name),
+        },
         None => ws.skills.values().collect(),
     };
 

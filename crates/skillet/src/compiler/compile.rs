@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use crate::workspace::Workspace;
 
 use super::{
-    PanSource,
     parse::{Node, PanParse, RefKind},
+    PanSource,
 };
 
 // ── Public types ───────────────────────────────────────────────────────────────
@@ -113,7 +113,9 @@ pub fn compile(ws: &Workspace, source: &PanSource) -> CompileOutput {
     let activation_tokens = crate::tokens::count_tokens(&full_text, &ws.tokenizer);
 
     let discovery_tokens = {
-        let fm = crate::frontmatter::parse_frontmatter(source.as_str()).ok().flatten();
+        let fm = crate::frontmatter::parse_frontmatter(source.as_str())
+            .ok()
+            .flatten();
         let text = fm
             .map(|f| {
                 format!(
@@ -143,7 +145,10 @@ pub(crate) fn body_start_offset(raw: &str) -> usize {
     let rest = &raw[3..];
     if let Some(close) = rest.find("\n---") {
         let after_dash = &rest[close + 4..];
-        let skip = after_dash.find('\n').map(|i| i + 1).unwrap_or(after_dash.len());
+        let skip = after_dash
+            .find('\n')
+            .map(|i| i + 1)
+            .unwrap_or(after_dash.len());
         3 + close + 4 + skip
     } else {
         0
@@ -169,12 +174,12 @@ pub fn render_fragments(raw: &HashMap<String, String>) -> RenderedFragments {
             .iter()
             .find(|n| matches!(n, Node::Fragment { .. }));
 
-        let has_ref = parser
-            .nodes
-            .iter()
-            .find(|n| matches!(n, Node::Ref { .. }));
+        let has_ref = parser.nodes.iter().find(|n| matches!(n, Node::Ref { .. }));
 
-        if let Some(Node::Fragment { value: nested_id, .. }) = nested {
+        if let Some(Node::Fragment {
+            value: nested_id, ..
+        }) = nested
+        {
             poisoned.insert(
                 id.clone(),
                 format!(

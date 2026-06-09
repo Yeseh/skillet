@@ -7,7 +7,7 @@
 //! - **References** — `.pan` files under `{skills_src_dir}/{skill}/references/**/*.pan`
 //! - **Agents** — `.pan` files under `agents/{name}/{name}.pan`
 //! - **Fragments** — `.fragment.pan` files under `{fragments_dir}/`
-//! 
+//!
 
 /// Skill, Script, and Reference type definitions.
 pub mod skill;
@@ -20,12 +20,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-use crate::compiler::compile::{RenderedFragments, render_fragments};
+use crate::compiler::compile::{render_fragments, RenderedFragments};
 use crate::config::{EnvVar, SkilletConfig};
 use crate::workspace::skill::{Reference, Script};
 
 // ── Artifact types ─────────────────────────────────────────────────────────────
-
 
 /// A discovered agent within the workspace.
 #[non_exhaustive]
@@ -154,7 +153,7 @@ impl Workspace {
 
         let target_dir = match sub_folder {
             Some(subdir) => &skill.src_dir.join(subdir),
-            None => &skill.src_dir
+            None => &skill.src_dir,
         };
 
         for entry in WalkDir::new(target_dir)
@@ -171,7 +170,6 @@ impl Workspace {
 
         files
     }
-
 }
 
 // ── Discovery functions ────────────────────────────────────────────────────────
@@ -241,10 +239,10 @@ fn discover_agents(source_dir: &Path, out_dir: &Path) -> Result<Vec<Agent>> {
             }
 
             let target_dir = out_dir.join(PathBuf::from("agents"));
-            Some (Agent {
-                name: filename.to_string(), 
+            Some(Agent {
+                name: filename.to_string(),
                 source_path: path.clone(),
-                target_path: target_dir.join(format!("{}.md", filename))
+                target_path: target_dir.join(format!("{}.md", filename)),
             })
         })
         .collect();
@@ -304,7 +302,10 @@ fn resolve_references(skill_dir: &Path) -> Result<Vec<Reference>> {
                 return None;
             }
             let rel_to_refs = path.strip_prefix(&refs_dir).ok()?;
-            let name = rel_to_refs.with_extension("").to_string_lossy().replace('\\', "/");
+            let name = rel_to_refs
+                .with_extension("")
+                .to_string_lossy()
+                .replace('\\', "/");
             let relative = path
                 .strip_prefix(skill_dir)
                 .ok()?
@@ -350,7 +351,6 @@ fn load_all_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
-
 // ── Utility functions ───────────────────────────────────────────────────────────
 
 /// Loads a fragment by name from `fragments_dir`.
@@ -366,7 +366,6 @@ pub fn load_fragment(fragments_dir: &Path, name: &str) -> Result<String> {
         )
     })
 }
-
 
 /// Returns `"sha256:<hex>"` of the file at `path`.
 pub fn hash_file(path: &Path) -> Result<String> {
@@ -418,7 +417,10 @@ mod tests {
         assert_eq!(skill.scripts.len(), 1);
         assert_eq!(skill.scripts[0].relative_path, "scripts/check.sh");
         assert_eq!(skill.references.len(), 1);
-        assert_eq!(skill.references[0].relative_path, "references/api/types.pan");
+        assert_eq!(
+            skill.references[0].relative_path,
+            "references/api/types.pan"
+        );
         assert_eq!(skill.references[0].name, "api/types");
         assert!(ws.agents.is_empty());
     }
@@ -430,7 +432,11 @@ mod tests {
 
         let agents_dir = tmp.path().join("agents");
         fs::create_dir_all(&agents_dir).unwrap();
-        fs::write(agents_dir.join("reviewer.pan"), "---\nname: reviewer\n---\n").unwrap();
+        fs::write(
+            agents_dir.join("reviewer.pan"),
+            "---\nname: reviewer\n---\n",
+        )
+        .unwrap();
 
         // Also create the skills src dir so resolution doesn't fail
         fs::create_dir_all(tmp.path().join("src/skills")).unwrap();
@@ -439,7 +445,10 @@ mod tests {
 
         assert!(ws.skills.is_empty());
         assert_eq!(ws.agents.len(), 1);
-        assert_eq!(ws.agents.get("reviewer").expect("agent 'reviewer'").name, "reviewer");
+        assert_eq!(
+            ws.agents.get("reviewer").expect("agent 'reviewer'").name,
+            "reviewer"
+        );
     }
 
     #[test]
