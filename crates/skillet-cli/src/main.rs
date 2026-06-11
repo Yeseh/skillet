@@ -38,7 +38,7 @@ enum SkillCommands {
 enum Commands {
     /// Initialize a skillet workspace
     Init {
-        /// Adopt existing SKILL.md files as .skill sources
+        /// Adopt existing .md files as .pan sources
         #[arg(long)]
         adopt: bool,
         /// Output format
@@ -56,7 +56,7 @@ enum Commands {
         #[arg(long)]
         format: Option<FormatArg>,
     },
-    /// Compile .skill sources to SKILL.md output files
+    /// Compile .pan source files to .md output files
     Build {
         /// Name of a single skill to compile (compiles all if omitted)
         name: Option<String>,
