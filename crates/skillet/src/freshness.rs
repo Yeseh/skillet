@@ -5,8 +5,6 @@
 //! and compares them against the hashes recorded in the lockfile, producing a
 //! [`CheckReport`] ready for rendering.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use crate::lockfile::Lockfile;
@@ -47,7 +45,7 @@ pub struct CheckReport {
 /// Computes the freshness report by hashing sources/outputs/fragments against
 /// the lockfile. The returned [`CheckReport`] is sorted and has `fresh`
 /// computed, ready to render.
-pub fn verify(ws: &Workspace, lockfile: &Lockfile, fragments_dir: &Path) -> CheckReport {
+pub fn verify(ws: &Workspace, lockfile: &Lockfile) -> CheckReport {
     let source_names: std::collections::HashSet<&str> =
         ws.skills.values().map(|s| s.name.as_str()).collect();
 
@@ -131,21 +129,32 @@ pub fn verify(ws: &Workspace, lockfile: &Lockfile, fragments_dir: &Path) -> Chec
 
     // Verify fragment hashes against lockfile.
     for (frag_name, frag_entry) in &lockfile.fragments {
-        let frag_path = fragments_dir.join(format!("{}.fragment.pan", frag_name));
-        let (reason, diff_kind) = match workspace::hash_file(&frag_path) {
-            Err(_) => (
+        let frag_path_opt = ws.fragment_paths.get(frag_name);
+        let (reason, diff_kind, file_str) = match frag_path_opt {
+            None => (
                 Some(format!(
                     "fragment '{frag_name}' is missing — run `skillet build`"
                 )),
                 Some("fragment_missing"),
+                None,
             ),
-            Ok(current_hash) if current_hash != frag_entry.hash => (
-                Some(format!(
-                    "fragment '{frag_name}' has changed since last build — run `skillet build`"
-                )),
-                Some("fragment_changed"),
-            ),
-            Ok(_) => (None, None),
+            Some(frag_path) => match workspace::hash_file(frag_path) {
+                Err(_) => (
+                    Some(format!(
+                        "fragment '{frag_name}' is missing — run `skillet build`"
+                    )),
+                    Some("fragment_missing"),
+                    Some(frag_path.to_string_lossy().to_string()),
+                ),
+                Ok(current_hash) if current_hash != frag_entry.hash => (
+                    Some(format!(
+                        "fragment '{frag_name}' has changed since last build — run `skillet build`"
+                    )),
+                    Some("fragment_changed"),
+                    Some(frag_path.to_string_lossy().to_string()),
+                ),
+                Ok(_) => (None, None, None),
+            },
         };
         if let (Some(r), Some(dk)) = (reason, diff_kind) {
             for skill_name in &frag_entry.used_by {
@@ -154,7 +163,7 @@ pub fn verify(ws: &Workspace, lockfile: &Lockfile, fragments_dir: &Path) -> Chec
                     result.reasons.push(r.clone());
                     result.diffs.push(DiffEntry {
                         kind: dk.to_string(),
-                        file: Some(frag_path.to_string_lossy().to_string()),
+                        file: file_str.clone(),
                     });
                 }
             }

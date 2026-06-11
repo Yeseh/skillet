@@ -27,6 +27,7 @@ use crate::compiler::PanSource;
 use crate::config::SkilletConfig;
 use crate::freshness;
 use crate::lockfile::Lockfile;
+use crate::refs::ParsedRefs;
 use crate::workspace::{Skill, Workspace};
 
 /// Individual lint rule implementations.
@@ -42,6 +43,8 @@ pub mod rules;
 pub struct CompiledSkill {
     /// Skill name (directory name).
     pub name: String,
+    /// Module this skill belongs to.
+    pub module: String,
     /// Absolute path to the `.pan` source file.
     pub source_path: PathBuf,
     /// Raw source content (empty if unreadable).
@@ -50,6 +53,8 @@ pub struct CompiledSkill {
     pub check_diags: Vec<CheckDiag>,
     /// Output of the compile stage.
     pub output: CompileOutput,
+    /// All refs extracted from the raw source (typed, links, untyped suspects).
+    pub parsed_refs: ParsedRefs,
 }
 
 fn compile_skill(skill: &Skill, ws: &Workspace) -> CompiledSkill {
@@ -59,13 +64,17 @@ fn compile_skill(skill: &Skill, ws: &Workspace) -> CompiledSkill {
     let known_files = ws.get_source_files_for_skill(skill);
     let check_diags = check_source_file(ws, &source, &known_files);
     let output = compile(ws, &source);
+    let skill_names: Vec<&str> = ws.skills.keys().map(|s| s.as_str()).collect();
+    let parsed_refs = ParsedRefs::extract(&raw, &skill_names);
 
     CompiledSkill {
         name: skill.name.clone(),
+        module: skill.module.clone(),
         source_path: skill.source_path.clone(),
         raw,
         check_diags,
         output,
+        parsed_refs,
     }
 }
 
@@ -137,6 +146,8 @@ pub struct LintOptions {
     pub format: OutputFormat,
     /// Single-skill mode: lint only this skill, skipping workspace rules.
     pub skill: Option<String>,
+    /// Single-module mode: lint only skills in this module.
+    pub module: Option<String>,
     /// Single-file mode: lint only this `.pan` file, skipping workspace rules.
     ///
     /// Used by editor integrations (e.g. `skillet lint --file <path>`).
@@ -153,6 +164,7 @@ impl LintOptions {
             pedantic,
             format,
             skill: None,
+            module: None,
             file_path: None,
             verbose: false,
         }
@@ -197,7 +209,16 @@ pub fn lint(
                 .collect()
         }
         (None, Some(name)) => ws.skills.values().filter(|s| &s.name == name).collect(),
-        (None, None) => ws.skills.values().collect(),
+        (None, None) => {
+            if let Some(module_name) = &opts.module {
+                ws.skills
+                    .values()
+                    .filter(|s| &s.module == module_name)
+                    .collect()
+            } else {
+                ws.skills.values().collect()
+            }
+        }
     };
 
     let run_workspace_rules = opts.file_path.is_none() && opts.skill.is_none();
@@ -211,7 +232,7 @@ pub fn lint(
             let skill_names: Vec<&str> = ws.skills.keys().map(|s| s.as_str()).collect();
             compiled
                 .par_iter()
-                .flat_map(|cs| lint_skill_rules(cs, config, &skill_names))
+                .flat_map(|cs| lint_skill_rules(cs, ws, config, &skill_names))
                 .collect()
         },
         || -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
@@ -229,7 +250,6 @@ pub fn lint(
     diagnostics.extend(stale_build_diags(
         ws,
         lockfile,
-        config,
         &target_names,
         run_workspace_rules,
     ));
@@ -242,9 +262,12 @@ pub fn lint(
 
 fn lint_skill_rules(
     cs: &CompiledSkill,
+    ws: &Workspace,
     config: &SkilletConfig,
     skill_names: &[&str],
 ) -> Vec<Diagnostic> {
+    use crate::refs::RefKind;
+
     let mut diags = Vec::new();
     let file_path = cs.source_path.to_string_lossy().to_string();
 
@@ -264,6 +287,55 @@ fn lint_skill_rules(
     diags.extend(rules::oversized::check_skill(cs, config));
     diags.extend(rules::oversized::check_description(cs, config));
 
+    // cross-module-fragment-ref: warn when a module skill uses a workspace-global fragment.
+    if !ws.global_fragment_names.is_empty() {
+        let module_local = ws.module_fragment_names.get(&cs.module);
+        for frag_name in &cs.output.fragments_used {
+            if ws.global_fragment_names.contains(frag_name) {
+                let is_also_local = module_local
+                    .map(|s| s.contains(frag_name.as_str()))
+                    .unwrap_or(false);
+                if !is_also_local {
+                    diags.push(diag(
+                        Severity::Warning,
+                        &cs.name,
+                        "cross-module-fragment-ref",
+                        format!(
+                            "fragment '{{{{> {frag_name} }}}}' is workspace-global and will not \
+                             be available when module '{}' is published standalone",
+                            cs.module
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    // cross-module-skill-ref: error when a skill:: ref targets a skill in a different module.
+    for typed_ref in cs
+        .parsed_refs
+        .typed
+        .iter()
+        .filter(|r| r.kind == RefKind::Skill)
+    {
+        if let Some(target) = ws.skills.get(&typed_ref.value) {
+            if target.module != cs.module {
+                diags.push(diag_located(
+                    Severity::Error,
+                    &cs.name,
+                    "cross-module-skill-ref",
+                    format!(
+                        "`skill::{}` is in module '{}' and cannot be referenced from module '{}'",
+                        typed_ref.value, target.module, cs.module
+                    ),
+                    Some(file_path.clone()),
+                    Some(typed_ref.line),
+                    Some(typed_ref.col),
+                ));
+            }
+        }
+    }
+
     diags
 }
 
@@ -275,6 +347,7 @@ fn lint_workspace_rules(
 ) -> (Vec<Diagnostic>, Vec<(String, Vec<u64>)>) {
     let mut diags = Vec::new();
     diags.extend(rules::unused_fragment::check(compiled, ws));
+    diags.extend(rules::unused_reference::check(compiled, ws));
     diags.extend(rules::oversized::check_fragments(ws, config));
     let (dup_diags, updated_sigs) = rules::duplication::check(compiled, lockfile);
     diags.extend(dup_diags);
@@ -313,12 +386,10 @@ fn diag_from_check(skill: &str, path: &str, d: &CheckDiag) -> Diagnostic {
 fn stale_build_diags(
     ws: &Workspace,
     lockfile: &Lockfile,
-    config: &SkilletConfig,
     target_names: &HashSet<&str>,
     run_workspace_rules: bool,
 ) -> Vec<Diagnostic> {
-    let fragments_dir = ws.root.join(&config.workspace.fragments_dir);
-    let report = freshness::verify(ws, lockfile, &fragments_dir);
+    let report = freshness::verify(ws, lockfile);
 
     report
         .skills

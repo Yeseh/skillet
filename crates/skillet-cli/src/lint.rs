@@ -14,13 +14,14 @@ use skillet::lockfile;
 use skillet::workspace::Workspace;
 use std::path::Path;
 
-/// Runs all enabled lint rules across the workspace (or a single skill/file).
+/// Runs all enabled lint rules across the workspace (or a single skill/file/module).
 ///
 /// Returns `Ok(true)` when the workspace is clean (no errors after severity
 /// promotion).
 pub fn run(
     workspace_path: &Path,
     skill_name: Option<&str>,
+    module_name: Option<&str>,
     opts: &LintOptions,
     config: &SkilletConfig,
 ) -> Result<bool> {
@@ -30,9 +31,10 @@ pub fn run(
     let mut lockfile = lockfile::read(workspace_path)?;
 
     // The library entry takes the target selectors via LintOptions; the CLI's
-    // `name` argument supplies the single-skill filter.
+    // `name` and `module` arguments supply the filters.
     let mut lint_opts = LintOptions::new(opts.strict, opts.pedantic, opts.format.clone());
     lint_opts.skill = skill_name.map(str::to_string);
+    lint_opts.module = module_name.map(str::to_string);
     lint_opts.file_path = opts.file_path.clone();
     lint_opts.verbose = opts.verbose;
 

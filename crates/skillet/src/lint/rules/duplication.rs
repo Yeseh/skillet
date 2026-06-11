@@ -345,6 +345,7 @@ mod tests {
             .iter()
             .map(|(name, text)| CompiledSkill {
                 name: name.to_string(),
+                module: "default".to_string(),
                 source_path: std::path::PathBuf::new(),
                 raw: String::new(),
                 check_diags: vec![],
@@ -354,6 +355,7 @@ mod tests {
                     activation_tokens: 0,
                     discovery_tokens: 0,
                 },
+                parsed_refs: crate::refs::ParsedRefs::default(),
             })
             .collect()
     }

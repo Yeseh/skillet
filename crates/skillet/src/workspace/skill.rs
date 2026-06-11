@@ -20,6 +20,8 @@ pub struct SkillFrontmatter {
 pub struct Skill {
     /// The name of the skill
     pub name: String,
+    /// The module this skill belongs to.
+    pub module: String,
     /// Absolute path to the `{name}.pan` source file.
     pub source_path: PathBuf,
     /// Absolute path to the skill's source directory.

@@ -60,19 +60,32 @@ pub struct BuildReport {
 pub fn run(
     workspace_path: &Path,
     skill_name: Option<&str>,
+    module_name: Option<&str>,
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
     let ws = Workspace::resolve(workspace_path, cfg)?;
-
-    // TODO create single artefact type, so we can iterate and compile everything
 
     let targets: Vec<&Skill> = match skill_name {
         Some(name) => match ws.skills.get(name) {
             Some(s) => vec![s],
             None => bail!("skill '{}' not found in workspace", name),
         },
-        None => ws.skills.values().collect(),
+        None => {
+            if let Some(mod_name) = module_name {
+                let skills: Vec<&Skill> = ws
+                    .skills
+                    .values()
+                    .filter(|s| s.module == mod_name)
+                    .collect();
+                if skills.is_empty() {
+                    bail!("module '{}' not found or has no skills", mod_name);
+                }
+                skills
+            } else {
+                ws.skills.values().collect()
+            }
+        }
     };
 
     if targets.is_empty() {
@@ -87,10 +100,30 @@ pub fn run(
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
-            let skills_src_dir = workspace_path.join(&cfg.workspace.src_dir);
-            eprintln!("no skills found in {}", skills_src_dir.display());
+            eprintln!("no skills found");
         }
         return Ok(());
+    }
+
+    // Detect output collisions before writing anything.
+    {
+        let mut seen: std::collections::HashMap<&std::path::Path, (&str, &str)> =
+            std::collections::HashMap::new();
+        for skill in &targets {
+            if let Some((other_module, other_skill)) =
+                seen.insert(skill.target_dir.as_path(), (&skill.module, &skill.name))
+            {
+                bail!(
+                    "output collision: skill '{}' (module '{}') and skill '{}' (module '{}') \
+                     both write to {}",
+                    skill.name,
+                    skill.module,
+                    other_skill,
+                    other_module,
+                    skill.target_dir.display()
+                );
+            }
+        }
     }
 
     let mut lockfile = lockfile::read(workspace_path)?;

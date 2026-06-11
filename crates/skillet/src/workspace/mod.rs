@@ -1,13 +1,13 @@
 //! Workspace resolution: discovers all artifact types and provides a single
-//! [`ResolvedWorkspace`] structure shared by the build and lint pipelines.
+//! [`Workspace`] structure shared by the build and lint pipelines.
 //!
 //! Artifact types:
-//! - **Skills** — `.pan` files under `{skills_src_dir}/{name}/{name}.pan`
-//! - **Scripts** — files under `{skills_src_dir}/{skill}/scripts/`
-//! - **References** — `.pan` files under `{skills_src_dir}/{skill}/references/**/*.pan`
+//! - **Skills** — `.pan` files under `{module.src_dir}/{name}/{name}.pan`
+//! - **Scripts** — files under `{module.src_dir}/{skill}/scripts/`
+//! - **References** — `.pan` files under `{module.src_dir}/{skill}/references/**/*.pan`
 //! - **Agents** — `.pan` files under `agents/{name}/{name}.pan`
-//! - **Fragments** — `.fragment.pan` files under `{fragments_dir}/`
-//!
+//! - **Fragments** — `.fragment.pan` files under `workspace.fragments_dir` (global)
+//!                   or `module.fragments_dir` (module-local)
 
 /// Skill, Script, and Reference type definitions.
 pub mod skill;
@@ -56,6 +56,12 @@ pub struct Workspace {
     pub fragment_hashes: HashMap<String, String>,
     /// Token count per fragment.
     pub fragment_tokens: HashMap<String, u32>,
+    /// Absolute path to each fragment's source file, keyed by fragment name.
+    pub fragment_paths: HashMap<String, PathBuf>,
+    /// Fragment names that come from the workspace-global `fragments_dir`.
+    pub global_fragment_names: HashSet<String>,
+    /// Fragment names local to each module, keyed by module name.
+    pub module_fragment_names: HashMap<String, HashSet<String>>,
     /// Variable substitutions from `[vars]` in `skillet.toml`.
     pub vars: BTreeMap<String, String>,
     /// Declared environment variables with defaults from `[env]`.
@@ -69,26 +75,69 @@ pub struct Workspace {
 impl Workspace {
     /// Resolves the full workspace from the given root directory and config.
     ///
-    /// Performs all filesystem I/O: discovers skills, agents, fragments; renders
-    /// fragments; scans source files for `cmd::` refs and probes PATH.
+    /// Performs all filesystem I/O: discovers skills from every module, agents,
+    /// and fragments (global + per-module); renders fragments; scans source
+    /// files for `cmd::` refs and probes PATH.
     pub fn resolve(root: &Path, cfg: &SkilletConfig) -> Result<Self> {
-        let skills_src_dir = root.join(&cfg.workspace.src_dir);
-        let skills_out_dir = root.join(&cfg.workspace.out_dir);
-        let fragments_dir = root.join(&cfg.workspace.fragments_dir);
         let agents_dir = root.join("agents");
 
-        let skills: HashMap<String, Skill> = discover_skills(&skills_src_dir, &skills_out_dir)?
-            .into_iter()
-            .map(|s| (s.name.clone(), s))
-            .collect();
-        let agents: HashMap<String, Agent> = discover_agents(&agents_dir, &skills_out_dir)?
+        // ── Step 1: workspace-global fragments ─────────────────────────────
+        let mut raw_fragments: HashMap<String, String> = HashMap::new();
+        let mut fragment_paths: HashMap<String, PathBuf> = HashMap::new();
+        let mut global_fragment_names: HashSet<String> = HashSet::new();
+
+        if let Some(frags_rel) = &cfg.workspace.fragments_dir {
+            let frags_dir = root.join(frags_rel);
+            let global_frags = load_all_fragments_with_paths(&frags_dir)?;
+            for (name, (content, path)) in global_frags {
+                global_fragment_names.insert(name.clone());
+                fragment_paths.insert(name.clone(), path);
+                raw_fragments.insert(name, content);
+            }
+        }
+
+        // ── Step 2: per-module skills and local fragments ───────────────────
+        let mut all_skills: Vec<Skill> = Vec::new();
+        let mut module_fragment_names: HashMap<String, HashSet<String>> = HashMap::new();
+
+        for (module_name, module_cfg) in &cfg.modules {
+            // Module-local fragments (override global for same name)
+            if let Some(frags_rel) = &module_cfg.fragments_dir {
+                let frags_dir = root.join(frags_rel);
+                let mod_frags = load_all_fragments_with_paths(&frags_dir)?;
+                let mut local_names = HashSet::new();
+                for (name, (content, path)) in mod_frags {
+                    local_names.insert(name.clone());
+                    fragment_paths.insert(name.clone(), path);
+                    raw_fragments.insert(name, content);
+                }
+                module_fragment_names.insert(module_name.clone(), local_names);
+            }
+
+            let src_dir = root.join(&module_cfg.src_dir);
+            let out_dir = root.join(&module_cfg.out_dir);
+            let mut skills = discover_skills(&src_dir, &out_dir)?;
+            for skill in &mut skills {
+                skill.module = module_name.clone();
+            }
+            all_skills.extend(skills);
+        }
+
+        // ── Step 3: agents (workspace-level, use first module's out_dir) ───
+        let first_out_dir = cfg
+            .modules
+            .values()
+            .next()
+            .map(|m| root.join(&m.out_dir))
+            .unwrap_or_else(|| root.join("skills"));
+
+        let agents: HashMap<String, Agent> = discover_agents(&agents_dir, &first_out_dir)?
             .into_iter()
             .map(|a| (a.name.clone(), a))
             .collect();
 
-        let raw_fragments = load_all_fragments(&fragments_dir)?;
+        // ── Step 4: render, hash, count fragments ───────────────────────────
         let rendered_fragments = render_fragments(&raw_fragments);
-
         let mut fragment_hashes = HashMap::new();
         let mut fragment_tokens = HashMap::new();
         for (name, content) in &raw_fragments {
@@ -99,6 +148,11 @@ impl Workspace {
             );
         }
 
+        let skills: HashMap<String, Skill> = all_skills
+            .into_iter()
+            .map(|s| (s.name.clone(), s))
+            .collect();
+
         Ok(Self {
             root: root.to_path_buf(),
             skills,
@@ -107,6 +161,9 @@ impl Workspace {
             fragments: rendered_fragments,
             fragment_hashes,
             fragment_tokens,
+            fragment_paths,
+            global_fragment_names,
+            module_fragment_names,
             vars: cfg.vars.clone(),
             env: cfg.env.clone(),
             allowed_commands: cfg.allowed_commands.clone(),
@@ -205,6 +262,7 @@ fn discover_skills(src_dir: &Path, out_dir: &Path) -> Result<Vec<Skill>> {
 
         skills.push(Skill {
             name: dir_name.clone(),
+            module: String::new(), // stamped by caller after discovery
             source_path,
             src_dir: skill_dir,
             target_dir: out_dir.join(&dir_name),
@@ -323,7 +381,10 @@ fn resolve_references(skill_dir: &Path) -> Result<Vec<Reference>> {
     Ok(references)
 }
 
-fn load_all_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
+/// Loads all fragments from `fragments_dir`, returning `(name, (content, path))` pairs.
+fn load_all_fragments_with_paths(
+    fragments_dir: &Path,
+) -> Result<HashMap<String, (String, PathBuf)>> {
     let mut map = HashMap::new();
     if !fragments_dir.exists() {
         return Ok(map);
@@ -334,7 +395,7 @@ fn load_all_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        let path = entry.path();
+        let path = entry.path().to_path_buf();
         if !path.is_file() {
             continue;
         }
@@ -343,9 +404,9 @@ fn load_all_fragments(fragments_dir: &Path) -> Result<HashMap<String, String>> {
             .and_then(|n| n.to_str())
             .and_then(|n| n.strip_suffix(".fragment.pan"))
         {
-            let content = std::fs::read_to_string(path)
+            let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read fragment '{}'", path.display()))?;
-            map.insert(name.to_string(), content);
+            map.insert(name.to_string(), (content, path));
         }
     }
     Ok(map)
@@ -414,6 +475,7 @@ mod tests {
         assert_eq!(ws.skills.len(), 1);
         let skill = ws.skills.get("diagnose").expect("skill 'diagnose'");
         assert_eq!(skill.name, "diagnose");
+        assert_eq!(skill.module, "default");
         assert_eq!(skill.scripts.len(), 1);
         assert_eq!(skill.scripts[0].relative_path, "scripts/check.sh");
         assert_eq!(skill.references.len(), 1);
@@ -494,6 +556,7 @@ mod tests {
         assert!(ws.fragments.rendered.contains_key("check-adrs"));
         assert!(ws.fragment_hashes.contains_key("check-adrs"));
         assert!(ws.fragment_tokens.contains_key("check-adrs"));
+        assert!(ws.fragment_paths.contains_key("check-adrs"));
     }
 
     #[test]
@@ -538,5 +601,33 @@ mod tests {
         let result = load_fragment(tmp.path(), "missing");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing"));
+    }
+
+    #[test]
+    fn global_fragments_tracked_separately_from_module_local() {
+        let tmp = TempDir::new().unwrap();
+
+        // Config with a global fragment dir and a module with its own
+        let mut cfg = SkilletConfig::default();
+        cfg.workspace.fragments_dir = Some("global-frags".to_string());
+        if let Some(m) = cfg.modules.get_mut("default") {
+            m.fragments_dir = Some("local-frags".to_string());
+        }
+
+        let global_dir = tmp.path().join("global-frags");
+        let local_dir = tmp.path().join("local-frags");
+        fs::create_dir_all(&global_dir).unwrap();
+        fs::create_dir_all(&local_dir).unwrap();
+        fs::write(global_dir.join("shared.fragment.pan"), "global content").unwrap();
+        fs::write(local_dir.join("private.fragment.pan"), "local content").unwrap();
+
+        let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
+
+        assert!(ws.global_fragment_names.contains("shared"));
+        assert!(!ws.global_fragment_names.contains("private"));
+        let local = ws.module_fragment_names.get("default").unwrap();
+        assert!(local.contains("private"));
+        assert!(!local.contains("shared"));
+        assert_eq!(ws.raw_fragments.len(), 2);
     }
 }

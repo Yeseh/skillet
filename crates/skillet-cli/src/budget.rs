@@ -23,13 +23,23 @@ pub enum OutputFormat {
 pub fn run(
     workspace_path: &Path,
     skill_name: Option<&str>,
+    module_name: Option<&str>,
     format: OutputFormat,
     config: &SkilletConfig,
 ) -> Result<()> {
     let ws = Workspace::resolve(workspace_path, config)?;
     let lf = lockfile::read(workspace_path)?;
 
-    let rows = compute_rows(&ws, &lf, skill_name, &config.build.tokenizer)?;
+    let mut rows = compute_rows(&ws, &lf, skill_name, &config.build.tokenizer)?;
+
+    if let Some(mod_name) = module_name {
+        rows.retain(|row| {
+            ws.skills
+                .get(&row.skill)
+                .map(|s| s.module == mod_name)
+                .unwrap_or(false)
+        });
+    }
 
     match format {
         OutputFormat::Text => print_text(&rows),

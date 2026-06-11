@@ -6,3 +6,4 @@ pub mod invalid_frontmatter;
 pub mod oversized;
 pub mod untyped_backtick;
 pub mod unused_fragment;
+pub mod unused_reference;

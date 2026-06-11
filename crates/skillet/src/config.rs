@@ -5,19 +5,57 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-/// Directory layout for the skillet workspace.
+/// Global workspace settings. Owns only workspace-wide concerns.
+/// Source and output directories live in `[module.*]` sections.
 #[non_exhaustive]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// Path (relative to the project root) where source `.pan` files are stored.
-    pub src_dir: String,
-    /// Path (relative to the project root) where compiled outputs are written.
-    pub out_dir: String,
-    /// Path where skill fragment `.fragment.pan` files are stored.
-    pub fragments_dir: String,
+    /// Path to workspace-global fragment files, shared across all modules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragments_dir: Option<String>,
+    /// Plugin marketplace publish settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishConfig>,
 }
 
-/// Linting rules applied during `skillet check`.
+/// Publish configuration controlling plugin marketplace output.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishConfig {
+    /// Agent runtimes to emit marketplace manifests for.
+    /// Supported values: `"claude"`, `"github-copilot"`.
+    pub agents: Vec<String>,
+    /// Marketplace identifier written into `marketplace.json`.
+    pub marketplace_name: String,
+    /// Marketplace owner name.
+    pub owner_name: String,
+    /// Marketplace owner contact email (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_email: Option<String>,
+}
+
+/// Per-module source/output configuration.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleConfig {
+    /// Path (relative to workspace root) where source `.pan` files live.
+    pub src_dir: String,
+    /// Path (relative to workspace root) where compiled outputs are written.
+    pub out_dir: String,
+    /// Published version of this module.
+    pub version: String,
+    /// Path to module-local fragment files (overrides global fragments of the same name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragments_dir: Option<String>,
+    /// Human-readable description written into `plugin.json` when publishing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether this module is included in the published marketplace.
+    #[serde(default)]
+    pub publish: bool,
+}
+
+/// Linting rules applied during `skillet lint`.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LintConfig {
@@ -27,7 +65,7 @@ pub struct LintConfig {
     pub max_discovery_tokens: u32,
     /// Maximum token budget for a single skill fragment.
     pub max_fragment_tokens: u32,
-    /// Rule IDs to silence (e.g. `"lint-missing-docs"`).  Empty by default.
+    /// Rule IDs to silence. Empty by default.
     #[serde(default)]
     pub disable: Vec<String>,
 }
@@ -55,35 +93,45 @@ pub struct EnvVar {
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SkilletConfig {
-    /// Workspace directory settings.
+    /// Global workspace settings.
+    #[serde(default)]
     pub workspace: WorkspaceConfig,
-    /// Linting configuration.
+    /// Named modules, each declaring a source/output pair.
+    #[serde(default, rename = "module")]
+    pub modules: BTreeMap<String, ModuleConfig>,
+    /// Linting configuration (inherited by all modules).
     pub lint: LintConfig,
-    /// Build configuration.
+    /// Build configuration (inherited by all modules).
     pub build: BuildConfig,
-
     /// Freeform template variables available inside skill templates.
     #[serde(default)]
     pub vars: BTreeMap<String, String>,
     /// Environment variables with their default values.
     #[serde(default)]
     pub env: BTreeMap<String, EnvVar>,
-    /// The allowed commands
+    /// Commands treated as available regardless of PATH.
     #[serde(default)]
     pub allowed_commands: HashSet<String>,
 }
 
 impl Default for SkilletConfig {
     fn default() -> Self {
-        let vars = BTreeMap::new();
-        let env = BTreeMap::new();
-
-        SkilletConfig {
-            workspace: WorkspaceConfig {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "default".to_string(),
+            ModuleConfig {
                 src_dir: "src/skills".to_string(),
                 out_dir: "skills".to_string(),
-                fragments_dir: "src/skills/_fragments".to_string(),
+                version: "0.1.0".to_string(),
+                fragments_dir: Some("src/skills/_fragments".to_string()),
+                description: None,
+                publish: false,
             },
+        );
+
+        SkilletConfig {
+            workspace: WorkspaceConfig::default(),
+            modules,
             lint: LintConfig {
                 max_activation_tokens: 4000,
                 max_discovery_tokens: 100,
@@ -94,8 +142,8 @@ impl Default for SkilletConfig {
                 tokenizer: "cl100k_base".to_string(),
                 verify_urls: false,
             },
-            vars,
-            env,
+            vars: BTreeMap::new(),
+            env: BTreeMap::new(),
             allowed_commands: HashSet::default(),
         }
     }
@@ -125,22 +173,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_workspace_dirs_are_nested_under_skills() {
-        // Arrange & Act
+    fn default_has_one_module_with_expected_dirs() {
         let cfg = SkilletConfig::default();
-
-        // Assert
-        assert_eq!(cfg.workspace.src_dir, "src/skills");
-        assert_eq!(cfg.workspace.out_dir, "skills");
-        assert_eq!(cfg.workspace.fragments_dir, "src/skills/_fragments");
+        assert_eq!(cfg.modules.len(), 1);
+        let m = cfg.modules.get("default").expect("default module");
+        assert_eq!(m.src_dir, "src/skills");
+        assert_eq!(m.out_dir, "skills");
+        assert_eq!(m.fragments_dir.as_deref(), Some("src/skills/_fragments"));
+        assert_eq!(m.version, "0.1.0");
     }
 
     #[test]
     fn default_lint_token_limits_match_spec() {
-        // Arrange & Act
         let cfg = SkilletConfig::default();
-
-        // Assert
         assert_eq!(cfg.lint.max_activation_tokens, 4000);
         assert_eq!(cfg.lint.max_discovery_tokens, 100);
         assert_eq!(cfg.lint.max_fragment_tokens, 500);
@@ -148,44 +193,71 @@ mod tests {
 
     #[test]
     fn default_build_uses_cl100k_base_tokenizer() {
-        // Arrange & Act
         let cfg = SkilletConfig::default();
-
-        // Assert
         assert_eq!(cfg.build.tokenizer, "cl100k_base");
         assert!(!cfg.build.verify_urls);
     }
 
     #[test]
     fn default_disable_list_is_empty() {
-        // Arrange & Act
         let cfg = SkilletConfig::default();
-
-        // Assert
         assert!(cfg.lint.disable.is_empty());
     }
 
     #[test]
-    fn to_toml_round_trips_expected_values() {
-        // Arrange
+    fn to_toml_round_trips_module_config() {
         let cfg = SkilletConfig::default();
-
-        // Act
         let toml_str = cfg.to_toml().unwrap();
         let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
 
-        // Assert
         assert_eq!(
-            parsed["workspace"]["src_dir"].as_str().unwrap(),
+            parsed["module"]["default"]["src_dir"].as_str().unwrap(),
             "src/skills"
         );
-        assert_eq!(parsed["workspace"]["out_dir"].as_str().unwrap(), "skills");
+        assert_eq!(
+            parsed["module"]["default"]["out_dir"].as_str().unwrap(),
+            "skills"
+        );
         assert_eq!(
             parsed["build"]["tokenizer"].as_str().unwrap(),
             "cl100k_base"
         );
-        // vars and env are empty by default; just verify the sections exist as tables
-        assert!(parsed.get("vars").is_some());
-        assert!(parsed.get("env").is_some());
+    }
+
+    #[test]
+    fn parse_multi_module_toml() {
+        let toml_str = r#"
+[workspace]
+
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens = 100
+max_fragment_tokens = 500
+
+[build]
+tokenizer = "cl100k_base"
+
+[module.core]
+src_dir = "src/skills"
+out_dir = "skills"
+version = "1.0.0"
+
+[module.plugin]
+src_dir = "plugin/src"
+out_dir = "plugin/out"
+version = "0.2.0"
+fragments_dir = "plugin/src/_fragments"
+"#;
+        let cfg: SkilletConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.modules.len(), 2);
+        let core = cfg.modules.get("core").unwrap();
+        assert_eq!(core.src_dir, "src/skills");
+        assert_eq!(core.version, "1.0.0");
+        assert!(core.fragments_dir.is_none());
+        let plugin = cfg.modules.get("plugin").unwrap();
+        assert_eq!(
+            plugin.fragments_dir.as_deref(),
+            Some("plugin/src/_fragments")
+        );
     }
 }

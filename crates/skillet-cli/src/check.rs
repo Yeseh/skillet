@@ -25,9 +25,13 @@ pub enum OutputFormat {
 }
 
 /// Runs freshness checks for all skills in the workspace.
-pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) -> Result<bool> {
+pub fn run(
+    workspace_path: &Path,
+    _module_name: Option<&str>,
+    format: OutputFormat,
+    config: &SkilletConfig,
+) -> Result<bool> {
     let ws = Workspace::resolve(workspace_path, config)?;
-    let fragments_dir = workspace_path.join(&config.workspace.fragments_dir);
 
     let lock_path = workspace_path.join("skillet.lock");
     if !lock_path.exists() {
@@ -36,7 +40,7 @@ pub fn run(workspace_path: &Path, format: OutputFormat, config: &SkilletConfig) 
     let lockfile = lockfile::read(workspace_path)
         .with_context(|| format!("failed to read {}", lock_path.display()))?;
 
-    let report = freshness::verify(&ws, &lockfile, &fragments_dir);
+    let report = freshness::verify(&ws, &lockfile);
 
     match format {
         OutputFormat::Json => {

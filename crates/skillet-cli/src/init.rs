@@ -22,12 +22,12 @@ pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
         );
     }
 
-    let cfg = skillet::config::SkilletConfig::default();
-    let default_cfg = cfg.to_toml()?;
+    let module_name = derive_module_name(workspace);
+    let config_toml = generate_config_toml(&module_name);
 
-    let skills_src_dir = workspace.join(&cfg.workspace.src_dir);
-    let skills_out_dir = workspace.join(&cfg.workspace.out_dir);
-    let fragments_dir = workspace.join(&cfg.workspace.fragments_dir);
+    let skills_src_dir = workspace.join("src/skills");
+    let skills_out_dir = workspace.join("skills");
+    let fragments_dir = workspace.join("src/skills/_fragments");
 
     if adopt {
         adopt_skills(&skills_out_dir, &skills_src_dir).context("failed to adopt SKILL.md files")?;
@@ -37,7 +37,7 @@ pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
     std::fs::create_dir_all(&skills_out_dir).context("failed to create skills output dir")?;
     std::fs::create_dir_all(&fragments_dir).context("failed to create fragments dir")?;
 
-    std::fs::write(&config_path, &default_cfg).context("failed to write skillet.toml")?;
+    std::fs::write(&config_path, &config_toml).context("failed to write skillet.toml")?;
 
     if json {
         let report = InitReport {
@@ -52,6 +52,63 @@ pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Derives a kebab-case module name from the workspace directory name.
+fn derive_module_name(workspace: &Path) -> String {
+    let folder = workspace
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("my-module");
+    to_kebab_case(folder)
+}
+
+/// Converts a string to kebab-case: lowercase, non-alphanumeric runs become `-`.
+fn to_kebab_case(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut result = String::new();
+    let mut prev_hyphen = true;
+    for ch in lower.chars() {
+        if ch.is_alphanumeric() {
+            result.push(ch);
+            prev_hyphen = false;
+        } else if !prev_hyphen {
+            result.push('-');
+            prev_hyphen = true;
+        }
+    }
+    let trimmed = result.trim_end_matches('-').to_string();
+    if trimmed.is_empty() {
+        "my-module".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// Generates the `skillet.toml` content for a new workspace with one named module.
+fn generate_config_toml(module_name: &str) -> String {
+    format!(
+        r#"[workspace]
+
+[vars]
+project_name = "{module_name}"
+
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens = 100
+max_fragment_tokens = 500
+
+[build]
+tokenizer = "cl100k_base"
+verify_urls = false
+
+[module.{module_name}]
+src_dir = "src/skills"
+out_dir = "skills"
+version = "0.1.0"
+fragments_dir = "src/skills/_fragments"
+"#
+    )
 }
 
 fn adopt_skills(skills_out_dir: &Path, skills_src_dir: &Path) -> Result<()> {
@@ -174,4 +231,34 @@ fn adopt_reference_dir(src: &Path, dest: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_kebab_case_lowercases_and_replaces_separators() {
+        assert_eq!(to_kebab_case("My Project"), "my-project");
+        assert_eq!(to_kebab_case("MyPlugin2.0"), "myplugin2-0");
+        assert_eq!(to_kebab_case("hello_world"), "hello-world");
+        assert_eq!(to_kebab_case("already-kebab"), "already-kebab");
+    }
+
+    #[test]
+    fn to_kebab_case_collapses_runs_of_separators() {
+        assert_eq!(to_kebab_case("a  b--c"), "a-b-c");
+    }
+
+    #[test]
+    fn to_kebab_case_trims_trailing_hyphen() {
+        assert_eq!(to_kebab_case("foo!"), "foo");
+    }
+
+    #[test]
+    fn generate_config_toml_contains_module_name() {
+        let toml = generate_config_toml("my-skill-pack");
+        assert!(toml.contains("[module.my-skill-pack]"));
+        assert!(toml.contains("project_name = \"my-skill-pack\""));
+    }
 }
