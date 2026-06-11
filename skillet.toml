@@ -1,21 +1,25 @@
 [workspace]
-src_dir = "src/skills"
-out_dir = "skills"
-fragments_dir = "src/skills/_fragments"
+
+[workspace.publish]
+agents = ["github-copilot", "claude"]
+marketplace_name = "skillet"
+owner_name = "Jesse Wellenberg"
+
+[vars]
+project_name = "skillet"
 
 [lint]
 max_activation_tokens = 4000
 max_discovery_tokens = 100
 max_fragment_tokens = 500
-allowed_commands = ["skillet"]
-disable = []
 
 [build]
 tokenizer = "cl100k_base"
 verify_urls = false
 
-[vars]
-project_name = "skillet"
-
-[env]
-CI = { default = "false" }
+[module.skillet]
+publish = true
+src_dir = "src/skills"
+out_dir = "skills"
+version = "0.1.0"
+fragments_dir = "src/skills/_fragments"

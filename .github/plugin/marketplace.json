@@ -1,0 +1,13 @@
+{
+  "name": "skillet",
+  "owner": {
+    "name": "Jesse Wellenberg"
+  },
+  "plugins": [
+    {
+      "name": "skillet",
+      "version": "0.1.0",
+      "source": "./skills"
+    }
+  ]
+}
