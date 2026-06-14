@@ -10,7 +10,7 @@ This project uses skillet to manage AI agent skills. Use the skillet CLI for all
 ## Get full documentation
 
 ```bash
-skillet skill skillet
+skillet skill print skillet
 ```
 
 ## Quick reference

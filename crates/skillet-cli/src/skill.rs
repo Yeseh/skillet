@@ -5,6 +5,10 @@ use anyhow::{bail, Result};
 static BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("skillet", include_str!("../../../skills/skillet/SKILL.md")),
     ("migrate", include_str!("../../../skills/migrate/SKILL.md")),
+    (
+        "skillet-shim",
+        include_str!("../../../skills/skillet-shim/SKILL.md"),
+    ),
 ];
 
 /// Lists all available bundled skill names to stdout.

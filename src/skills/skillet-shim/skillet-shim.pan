@@ -10,7 +10,7 @@ This project uses `var::project_name` to manage AI agent skills. Use the `var::p
 ## Get full documentation
 
 ```bash
-skillet skill skillet
+skillet skill print skillet
 ```
 
 ## Quick reference

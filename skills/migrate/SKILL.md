@@ -94,6 +94,106 @@ two or more skills.  Common candidates:
    src/skills/_fragments/<name>.fragment.pan
    ```
    Paste the shared passage as its entire content (no frontmatter required).
-2. Replace every occurrence in the `.pan` files with the Handlebars include:
+2. Replace every occurrence in the `.pan` files with a fragment include on its
+   own line: wrap the fragment name in the fragment delimiters — an opening `{`
+   immediately followed by `>`, then the name, then the closing pair `<}`.
+   Includes are block-level and cannot be nested.
+3. Rebuild and verify:
    ```
-   {
+   skillet build
+   skillet lint
+   ```
+   Confirm no `unused-fragment` warning fires (every fragment is referenced
+   at least once) and that the compiled `SKILL.md` output is unchanged.
+
+---
+
+## Phase 4 — Configure skillet.toml
+
+Open `skillet.toml` and tune it for the project.  The default file written by
+`skillet init` is a starting point; adjust each section as needed.
+
+**[workspace]`** — workspace-wide settings. The only path it owns is the
+global fragments directory; source and output paths live per-module:
+
+```toml
+[workspace]
+fragments_dir = "src/skills/_fragments"
+```
+
+**[module.<name>]`** — each module declares its own source/output pair.
+`skillet init` writes a single `default` module; add or rename modules only if
+the project ships more than one source/output tree:
+
+```toml
+[module.default]
+src_dir = "src/skills"
+out_dir = "skills"
+version = "0.1.0"
+```
+
+**[vars]`** — promote any project-specific string that appears in multiple
+skills to a named variable, then reference it with `var::name`:
+
+```toml
+[vars]
+project_name = "my-project"
+repo_url     = "https://github.com/org/repo"
+```
+
+**[env]`** — declare environment variables that skills reference, with
+sensible defaults so builds work locally without every variable set:
+
+```toml
+[env]
+CI        = { default = "false" }
+TEAM_NAME = { default = "engineering" }
+```
+
+**[lint]`** — token budgets and rule control.  Add rule IDs to `disable` only
+when a rule genuinely does not apply to the project:
+
+```toml
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens  = 100
+max_fragment_tokens   = 500
+disable               = []
+```
+
+**`allowed_commands`** — a top-level array (not under [lint]) listing every
+shell command referenced via `cmd::…` that should be treated as available
+regardless of whether it is found on `PATH`:
+
+```toml
+allowed_commands = ["docker", "kubectl", "make"]
+```
+
+**[build]`** — enable URL verification once you are confident all links are
+reachable; leave it off during the initial migration pass to avoid noise:
+
+```toml
+[build]
+tokenizer   = "cl100k_base"
+verify_urls = false
+```
+
+---
+
+## Phase 5 — Verify and finalize
+
+Run the full pipeline to confirm the workspace is clean:
+
+```
+skillet build          # compile all .pan sources to SKILL.md
+skillet check          # confirm outputs are fresh
+skillet lint --strict  # promote warnings to errors; fix any that remain
+skillet budget         # review token costs; split oversized skills if needed
+```
+
+Commit both the source files and the compiled outputs together:
+
+```
+git add src/skills/ skills/ skillet.toml skillet.lock
+git commit -m "Migrate skills to skillet workspace"
+```

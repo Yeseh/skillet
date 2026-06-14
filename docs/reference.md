@@ -142,10 +142,10 @@ CI default: `env::CI`.
 
 ### Fragments
 
-Fragments live under `src/skills/_fragments/` and are included with:
+Fragments live under `src/skills/_fragments/` and are included on their own line with:
 
 ```markdown
-{{> common }}
+{> common <}
 ```
 
 A fragment file is named like:
@@ -173,15 +173,30 @@ During build:
 
 ## Configuration
 
-`skillet.toml` controls workspace paths, lint thresholds, tokenizer settings, and declared vars/env values.
+`skillet.toml` controls workspace settings, per-module source/output paths, lint thresholds, tokenizer settings, and declared vars/env values.
 
 ### `[workspace]`
 
+Workspace-wide settings. Source and output directories are declared per-module in `[module.*]`, not here.
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `skills_src_dir` | string | `"src/skills"` | Directory where skill source `.pan` files are stored, relative to the project root. |
-| `skills_out_dir` | string | `"skills"` | Directory where compiled `SKILL.md` outputs are written, relative to the project root. |
-| `fragments_dir` | string | `"src/skills/_fragments"` | Directory where fragment `.fragment.pan` files are stored. |
+| `fragments_dir` | string | `"src/skills/_fragments"` | Directory holding workspace-global fragment `.fragment.pan` files, shared across all modules. |
+
+`[workspace.publish]` configures plugin-marketplace output, with keys `agents`, `marketplace_name`, `owner_name`, and optional `owner_email`.
+
+### `[module.<name>]`
+
+Each module declares one source/output pair. `skillet init` writes a single `default` module; add more only when a project ships more than one source/output tree.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `src_dir` | string | `"src/skills"` | Directory holding this module's `.pan` sources, relative to the project root. |
+| `out_dir` | string | `"skills"` | Directory where this module's compiled `SKILL.md` outputs are written. |
+| `version` | string | — | Published version of the module (required). |
+| `fragments_dir` | string | _(none)_ | Module-local fragment directory; overrides workspace fragments of the same name. |
+| `description` | string | _(none)_ | Description written into `plugin.json` when the module is published. |
+| `publish` | boolean | `false` | Whether this module is included in the published marketplace. |
 
 ### `[lint]`
 
@@ -190,8 +205,15 @@ During build:
 | `max_activation_tokens` | integer | `4000` | Maximum token budget for a skill's activation section. Exceeding this triggers an oversized warning. |
 | `max_discovery_tokens` | integer | `100` | Maximum token budget for a skill's discovery section (name + description). |
 | `max_fragment_tokens` | integer | `500` | Maximum token budget for a single fragment file. |
-| `allowed_commands` | list of strings | `["playwright", "docker", "kubectl"]` | Shell commands that skills are permitted to reference with `cmd::`. Commands not in this list are flagged. |
 | `disable` | list of strings | `[]` | Rule IDs to silence (e.g. `"lint-missing-docs"`). |
+
+### `allowed_commands`
+
+A top-level key (not nested under `[lint]`). A list of shell commands that skills may reference with `cmd::` regardless of whether they are found on `PATH`. Commands that are neither listed here nor on `PATH` are flagged. Defaults to an empty list.
+
+```toml
+allowed_commands = ["docker", "kubectl"]
+```
 
 ### `[build]`
 
@@ -224,16 +246,20 @@ default = "engineering"
 ### Full example
 
 ```toml
+allowed_commands = ["docker", "kubectl"]
+
 [workspace]
-skills_src_dir = "src/skills"
-skills_out_dir = "skills"
 fragments_dir = "src/skills/_fragments"
+
+[module.default]
+src_dir = "src/skills"
+out_dir = "skills"
+version = "0.1.0"
 
 [lint]
 max_activation_tokens = 4000
 max_discovery_tokens = 100
 max_fragment_tokens = 500
-allowed_commands = ["playwright", "docker", "kubectl"]
 disable = []
 
 [build]

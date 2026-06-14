@@ -4,7 +4,7 @@
 
 - **Skill**: A folder containing a `SKILL.md` file (compiled output) and optionally scripts, references, and assets. Follows the [Agent Skills](https://agentskills.io/home) open format.
 - **Skill source**: A `{name}.pan` file — the authoring format that compiles to `SKILL.md`. Contains template directives (fragment includes, typed refs, vars).
-- **Fragment**: A reusable block of skill instructions. File named `{name}.fragment.pan`, lives in the workspace-global fragments directory. Included via `{{> name }}` syntax. Block-level only, no parameters.
+- **Fragment**: A reusable block of skill instructions. File named `{name}.fragment.pan`, lives in the workspace-global fragments directory. Included via `{> name <}` syntax. Block-level only, no parameters.
 - **Ref**: A reference from a skill to an external entity. First-class concept with types: `ref::` (file path), `cmd::` (CLI command), `skill::` (another skill in workspace), `var::` (workspace variable), `env::` (declared environment variable).
 - **Used reference**: A reference file is considered used when the owning skill's `.pan` source contains a `ref::` directive whose value matches the file's path relative to the skill directory (e.g. `ref::references/api/types.pan`). Markdown links and cross-skill `ref::` paths do not count as usage. Enforced by the `unused-reference` lint rule.
 - **Workspace**: A directory containing a `skillet.toml` and a skills directory. The unit of analysis for cross-skill operations (duplication detection, budget totals).

@@ -70,7 +70,7 @@ src/skills/
 ```
 
 **Build Pipeline:**
-- Fragment expansion (`{{> fragment-name }}`)
+- Fragment expansion (`{> fragment-name <}`)
 - Variable/env substitution (`var::`, `env::`)
 - Typed ref validation (`ref::`, `cmd::`, `skill::`)
 - Token counting (discovery + activation costs)

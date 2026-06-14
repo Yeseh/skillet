@@ -29,7 +29,9 @@ A workspace contains:
 | ``skillet check`` | Verify compiled output is fresh |
 | ``skillet lint [name]`` | Run quality lint rules |
 | ``skillet budget [name]`` | Show token cost information |
-| ``skillet skill <name>`` | Print a bundled skill to stdout |
+| ``skillet publish`` | Publish plugin manifests to agent marketplaces |
+| ``skillet skill list`` | List bundled skills |
+| ``skillet skill print <name>`` | Print a bundled skill to stdout |
 
 Commands that support formatting accept `--format json`.
 By default, output is plain text.
@@ -61,7 +63,7 @@ Inside `.pan` files you can use backtick typed refs to reference external resour
 
 ## Fragments
 
-Extract shared passages to ``src/skills/_fragments/<name>.fragment.pan`` and include with ``{> name }``.
+Extract shared passages to ``src/skills/_fragments/<name>.fragment.pan`` and include one on its own line by wrapping the fragment name in the fragment delimiters — an opening `{` immediately followed by `>`, then the name, then the closing pair ``<}``. Includes are block-level and cannot be nested.
 
 ## Workflow
 

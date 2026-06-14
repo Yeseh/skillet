@@ -55,4 +55,12 @@ Inside `.pan` files you can use backtick typed refs to reference external resour
 
 ## Fragments
 
-Extract shared passages to `src/skills/_fragments/<name>.fragment.pan` and include with 
+Extract shared passages to `src/skills/_fragments/<name>.fragment.pan` and include one on its own line by wrapping the fragment name in the fragment delimiters — an opening `{` immediately followed by `>`, then the name, then the closing pair `<}`. Includes are block-level and cannot be nested.
+
+## Workflow
+
+1. `skillet new <name>` — scaffold a skill
+2. Edit `src/skills/<name>/<name>.pan`
+3. `skillet build` — compile to `skills/<name>/SKILL.md`
+4. `skillet lint` — check for quality issues
+5. `skillet check` in CI — verify output is fresh
