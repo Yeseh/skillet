@@ -7,7 +7,7 @@
 //! - **References** — `.pan` files under `{module.src_dir}/{skill}/references/**/*.pan`
 //! - **Agents** — `.pan` files under `agents/{name}/{name}.pan`
 //! - **Fragments** — `.fragment.pan` files under `workspace.fragments_dir` (global)
-//!                   or `module.fragments_dir` (module-local)
+//! or `module.fragments_dir` (module-local)
 
 /// Skill, Script, and Reference type definitions.
 pub mod skill;
@@ -74,7 +74,6 @@ pub struct Workspace {
 
 impl Workspace {
     /// Resolves the full workspace from the given root directory and config.
-    ///
     /// Performs all filesystem I/O: discovers skills from every module, agents,
     /// and fragments (global + per-module); renders fragments; scans source
     /// files for `cmd::` refs and probes PATH.
