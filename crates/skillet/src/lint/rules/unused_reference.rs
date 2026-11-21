@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::refs::RefKind;
 use crate::workspace::Workspace;
 
-use super::{diag, CompiledSkill, Diagnostic, Severity};
+use super::{diag_located, CompiledSkill, Diagnostic, Severity};
 
 /// Finds reference files that no `ref::` directive in the owning skill points to.
 ///
@@ -34,7 +34,7 @@ pub fn check(compiled: &[CompiledSkill], ws: &Workspace) -> Vec<Diagnostic> {
 
         for reference in &skill.references {
             if !used.contains(reference.name.as_str()) {
-                diags.push(diag(
+                diags.push(diag_located(
                     Severity::Warning,
                     &cs.name,
                     "unused-reference",
@@ -42,6 +42,9 @@ pub fn check(compiled: &[CompiledSkill], ws: &Workspace) -> Vec<Diagnostic> {
                         "reference '{}' is not pointed to by any ref:: in this skill",
                         reference.relative_path
                     ),
+                    Some(reference.absolute_path.to_string_lossy().to_string()),
+                    Some(1),
+                    None,
                 ));
             }
         }

@@ -3,7 +3,7 @@
 use crate::workspace::Workspace;
 use std::collections::HashSet;
 
-use super::{diag, CompiledSkill, Diagnostic, Severity};
+use super::{diag_located, CompiledSkill, Diagnostic, Severity};
 
 /// Finds fragments that no skill expands.
 ///
@@ -24,11 +24,18 @@ pub fn check(compiled: &[CompiledSkill], ws: &Workspace) -> Vec<Diagnostic> {
         .into_iter()
         .filter(|frag_name| !used.contains(*frag_name))
         .map(|frag_name| {
-            diag(
+            let path = ws
+                .fragment_paths
+                .get(frag_name)
+                .map(|p| p.to_string_lossy().to_string());
+            diag_located(
                 Severity::Warning,
                 "<workspace>",
                 "unused-fragment",
                 format!("fragment '{frag_name}' is not included by any skill"),
+                path,
+                Some(1),
+                None,
             )
         })
         .collect()

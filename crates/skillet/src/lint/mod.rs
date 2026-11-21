@@ -25,9 +25,10 @@ use std::path::PathBuf;
 
 use rayon::prelude::*;
 
-use crate::agent::AgentDefinition;
+use crate::agent::{AgentDefinition, AgentError};
 use crate::compiler::check::{check_source_file, CheckDiag, CheckKind};
-use crate::compiler::compile::{compile, CompileOutput};
+use crate::compiler::compile::{body_start_offset, compile, CompileOutput};
+use crate::compiler::parse::{Node, PanParse};
 use crate::compiler::PanSource;
 use crate::config::SkilletConfig;
 use crate::freshness;
@@ -96,6 +97,21 @@ pub enum Severity {
     Error,
 }
 
+/// A secondary source location associated with a [`Diagnostic`].
+#[derive(Debug, Clone, Serialize)]
+pub struct RelatedLocation {
+    /// File path of the related location.
+    pub path: String,
+    /// 1-based line number (when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// 1-based column number (when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
+    /// Human-readable description of this related location.
+    pub message: String,
+}
+
 /// A single lint finding.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize)]
@@ -124,6 +140,9 @@ pub struct Diagnostic {
     /// Skill names that share the duplicated passage (duplication rule only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affected_skills: Option<Vec<String>>,
+    /// Secondary source locations related to this diagnostic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related: Option<Vec<RelatedLocation>>,
 }
 
 /// Output format for lint results.
@@ -289,7 +308,9 @@ fn lint_skill_rules(
     let mut diags = Vec::new();
     let file_path = cs.source_path.to_string_lossy().to_string();
 
-    diags.extend(rules::invalid_frontmatter::check(&cs.name, &cs.raw));
+    diags.extend(rules::invalid_frontmatter::check(
+        &cs.name, &file_path, &cs.raw,
+    ));
 
     // Referential integrity comes straight from the check stage.
     for d in &cs.check_diags {
@@ -314,7 +335,8 @@ fn lint_skill_rules(
                     .map(|s| s.contains(frag_name.as_str()))
                     .unwrap_or(false);
                 if !is_also_local {
-                    diags.push(diag(
+                    let loc = find_fragment_include_location(&cs.raw, frag_name);
+                    diags.push(diag_located(
                         Severity::Warning,
                         &cs.name,
                         "cross-plugin-fragment-ref",
@@ -323,6 +345,9 @@ fn lint_skill_rules(
                              be available when plugin '{}' is published standalone",
                             cs.plugin
                         ),
+                        Some(file_path.clone()),
+                        loc.map(|(line, _)| line).or(Some(1)),
+                        loc.map(|(_, col)| col),
                     ));
                 }
             }
@@ -389,15 +414,29 @@ fn lint_agent(agent: &Agent, ws: &Workspace) -> Vec<Diagnostic> {
 
     let output = compile(ws, &source, &[]);
     match AgentDefinition::parse(&output.text, &agent.name) {
-        Err(e) => diags.push(diag_located(
-            Severity::Error,
-            &agent.name,
-            &format!("agent-{}", e.code()),
-            e.to_string(),
-            Some(file_path.clone()),
-            None,
-            None,
-        )),
+        Err(e) => {
+            let line = match &e {
+                AgentError::InvalidName(_) | AgentError::NameMismatch { .. } => {
+                    frontmatter_field_line(&raw, "name").or(Some(1))
+                }
+                AgentError::MissingDescription => {
+                    frontmatter_field_line(&raw, "description").or(Some(1))
+                }
+                AgentError::BodyTooLong { .. } => Some(body_start_line(&raw)),
+                AgentError::MissingFrontmatter
+                | AgentError::InvalidFrontmatter(_)
+                | AgentError::MissingName => Some(1),
+            };
+            diags.push(diag_located(
+                Severity::Error,
+                &agent.name,
+                &format!("agent-{}", e.code()),
+                e.to_string(),
+                Some(file_path.clone()),
+                line,
+                None,
+            ));
+        }
         Ok(def) => {
             for field in def.claude_ignored_fields() {
                 diags.push(diag_located(
@@ -406,7 +445,7 @@ fn lint_agent(agent: &Agent, ws: &Workspace) -> Vec<Diagnostic> {
                     "agent-field-ignored-by-claude",
                     format!("Claude Code ignores '{field}' for agents loaded from a plugin"),
                     Some(file_path.clone()),
-                    None,
+                    frontmatter_field_line(&raw, field).or(Some(1)),
                     None,
                 ));
             }
@@ -492,14 +531,84 @@ fn stale_build_diags(
         .chain(agents)
         .filter(|r| !r.fresh)
         .flat_map(|r| {
-            r.reasons
-                .iter()
-                .map(move |reason| diag(Severity::Error, &r.name, "stale-build", reason.clone()))
+            let path = ws
+                .skills
+                .get(&r.name)
+                .map(|s| s.source_path.to_string_lossy().to_string())
+                .or_else(|| {
+                    ws.agents
+                        .get(&r.name)
+                        .map(|a| a.source_path.to_string_lossy().to_string())
+                })
+                .unwrap_or_else(|| ws.root.join("skillet.lock").to_string_lossy().to_string());
+            r.reasons.iter().map(move |reason| {
+                diag_located(
+                    Severity::Error,
+                    &r.name,
+                    "stale-build",
+                    reason.clone(),
+                    Some(path.clone()),
+                    Some(1),
+                    None,
+                )
+            })
         })
         .collect()
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Finds the 1-based line number of a top-level YAML key inside frontmatter.
+pub(crate) fn frontmatter_field_line(raw: &str, field: &str) -> Option<u32> {
+    let text = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    let mut lines = text.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    for (idx, line) in lines.enumerate() {
+        let trimmed = line.trim();
+        if trimmed == "---" || trimmed == "..." {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix(field) {
+            if rest.trim_start().starts_with(':') {
+                return Some((idx + 2) as u32);
+            }
+        }
+    }
+    None
+}
+
+/// Returns the 1-based line number where the markdown body starts (after frontmatter).
+pub(crate) fn body_start_line(raw: &str) -> u32 {
+    let offset = body_start_offset(raw);
+    (raw[..offset].matches('\n').count() + 1) as u32
+}
+
+/// Finds the 1-based `(line, col)` of a `{> frag_name <}` include in `raw`.
+fn find_fragment_include_location(raw: &str, frag_name: &str) -> Option<(u32, u32)> {
+    let body_offset = body_start_offset(raw);
+    let body = &raw[body_offset..];
+    let fm_line_offset = raw[..body_offset].matches('\n').count() as u32;
+
+    let body_source = PanSource::new(body.to_string());
+    let mut parser = PanParse::new(&body_source);
+    parser.parse();
+
+    for node in &parser.nodes {
+        if let Node::Fragment {
+            value,
+            source_range,
+        } = node
+        {
+            if value.trim() == frag_name {
+                let loc = body_source.location_at(source_range.start);
+                return Some((loc.line + fm_line_offset, loc.column));
+            }
+        }
+    }
+    None
+}
 
 /// Constructs a [`Diagnostic`] without location information.
 pub fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Diagnostic {
@@ -513,6 +622,7 @@ pub fn diag(severity: Severity, skill: &str, rule: &str, message: String) -> Dia
         col: None,
         duplicated_text: None,
         affected_skills: None,
+        related: None,
     }
 }
 
@@ -536,5 +646,6 @@ pub fn diag_located(
         col,
         duplicated_text: None,
         affected_skills: None,
+        related: None,
     }
 }

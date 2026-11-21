@@ -5,6 +5,13 @@ import * as fs from "fs";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface LintRelatedLocation {
+  path: string;
+  line?: number;
+  col?: number;
+  message: string;
+}
+
 interface LintDiagnostic {
   rule: string;
   severity: "error" | "warning" | "info";
@@ -12,6 +19,8 @@ interface LintDiagnostic {
   message: string;
   path?: string;
   line?: number;
+  col?: number;
+  related?: LintRelatedLocation[];
 }
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -374,21 +383,51 @@ function runLint(
 
 // ── Diagnostics publishing ────────────────────────────────────────────────────
 
+function resolveDiagnosticPath(
+  d: LintDiagnostic,
+  workspaceRoot: string,
+  dirs: WorkspaceDirs
+): string {
+  if (d.path) {
+    return path.isAbsolute(d.path)
+      ? d.path
+      : path.join(workspaceRoot, d.path);
+  }
+
+  if (d.skill && d.skill !== "<workspace>") {
+    const fallback = firstExisting([
+      ...dirs.srcDirs.map((src) =>
+        path.join(workspaceRoot, src, d.skill, `${d.skill}.pan`)
+      ),
+      path.join(workspaceRoot, "agents", `${d.skill}.agent.pan`),
+    ]);
+    if (fallback) {
+      return fallback;
+    }
+  }
+
+  return path.join(workspaceRoot, "skillet.toml");
+}
+
+function toVscodeRange(line?: number, col?: number): vscode.Range {
+  // line and col are 1-based from skillet; VS Code uses 0-based
+  const zeroLine = line !== undefined ? Math.max(0, line - 1) : 0;
+  const startCol = col !== undefined ? Math.max(0, col - 1) : 0;
+  return new vscode.Range(zeroLine, startCol, zeroLine, Number.MAX_SAFE_INTEGER);
+}
+
 function publishDiagnostics(
   lintDiags: LintDiagnostic[],
   workspaceRoot: string
 ): void {
-  // Group by file path; diagnostics without a path go to a synthetic URI
+  const dirs = parseWorkspaceDirs(workspaceRoot);
   const byUri = new Map<string, vscode.Diagnostic[]>();
 
   for (const d of lintDiags) {
-    const uriStr = d.path
-      ? vscode.Uri.file(
-          path.isAbsolute(d.path) ? d.path : path.join(workspaceRoot, d.path)
-        ).toString()
-      : vscode.Uri.file(path.join(workspaceRoot, "skillet.toml")).toString();
+    const filePath = resolveDiagnosticPath(d, workspaceRoot, dirs);
+    const uriStr = vscode.Uri.file(filePath).toString();
 
-    const vscodeDiag = toVscodeDiagnostic(d);
+    const vscodeDiag = toVscodeDiagnostic(d, workspaceRoot);
     const existing = byUri.get(uriStr) ?? [];
     existing.push(vscodeDiag);
     byUri.set(uriStr, existing);
@@ -401,7 +440,10 @@ function publishDiagnostics(
   }
 }
 
-function toVscodeDiagnostic(d: LintDiagnostic): vscode.Diagnostic {
+function toVscodeDiagnostic(
+  d: LintDiagnostic,
+  workspaceRoot: string
+): vscode.Diagnostic {
   const severity =
     d.severity === "error"
       ? vscode.DiagnosticSeverity.Error
@@ -409,17 +451,26 @@ function toVscodeDiagnostic(d: LintDiagnostic): vscode.Diagnostic {
       ? vscode.DiagnosticSeverity.Warning
       : vscode.DiagnosticSeverity.Information;
 
-  // line is 1-based from skillet; VS Code uses 0-based
-  const line = d.line !== undefined ? Math.max(0, d.line - 1) : 0;
-  const range = new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER);
-
   const diag = new vscode.Diagnostic(
-    range,
+    toVscodeRange(d.line, d.col),
     `${d.message} [${d.rule}]`,
     severity
   );
   diag.source = "skillet";
   diag.code = d.rule;
+
+  if (d.related && d.related.length > 0) {
+    diag.relatedInformation = d.related.map((r) => {
+      const relPath = path.isAbsolute(r.path)
+        ? r.path
+        : path.join(workspaceRoot, r.path);
+      return new vscode.DiagnosticRelatedInformation(
+        new vscode.Location(vscode.Uri.file(relPath), toVscodeRange(r.line, r.col)),
+        r.message
+      );
+    });
+  }
+
   return diag;
 }
 

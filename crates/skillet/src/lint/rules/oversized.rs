@@ -3,7 +3,7 @@
 use crate::config::SkilletConfig;
 use crate::workspace::Workspace;
 
-use super::{diag, CompiledSkill, Diagnostic, Severity};
+use super::{diag_located, frontmatter_field_line, CompiledSkill, Diagnostic, Severity};
 
 /// Checks whether the compiled `SKILL.md` activation cost exceeds the limit.
 ///
@@ -11,7 +11,7 @@ use super::{diag, CompiledSkill, Diagnostic, Severity};
 pub fn check_skill(cs: &CompiledSkill, config: &SkilletConfig) -> Vec<Diagnostic> {
     let tokens = cs.output.activation_tokens;
     if tokens > config.lint.max_activation_tokens {
-        vec![diag(
+        vec![diag_located(
             Severity::Warning,
             &cs.name,
             "oversized-skill",
@@ -19,6 +19,9 @@ pub fn check_skill(cs: &CompiledSkill, config: &SkilletConfig) -> Vec<Diagnostic
                 "activation ~{tokens} tokens exceeds limit of {}",
                 config.lint.max_activation_tokens
             ),
+            Some(cs.source_path.to_string_lossy().to_string()),
+            Some(1),
+            None,
         )]
     } else {
         vec![]
@@ -31,7 +34,7 @@ pub fn check_skill(cs: &CompiledSkill, config: &SkilletConfig) -> Vec<Diagnostic
 pub fn check_description(cs: &CompiledSkill, config: &SkilletConfig) -> Vec<Diagnostic> {
     let tokens = cs.output.discovery_tokens;
     if tokens > config.lint.max_discovery_tokens {
-        vec![diag(
+        vec![diag_located(
             Severity::Warning,
             &cs.name,
             "oversized-description",
@@ -39,6 +42,9 @@ pub fn check_description(cs: &CompiledSkill, config: &SkilletConfig) -> Vec<Diag
                 "discovery ~{tokens} tokens exceeds limit of {}",
                 config.lint.max_discovery_tokens
             ),
+            Some(cs.source_path.to_string_lossy().to_string()),
+            frontmatter_field_line(&cs.raw, "description").or(Some(1)),
+            None,
         )]
     } else {
         vec![]
@@ -51,7 +57,11 @@ pub fn check_fragments(ws: &Workspace, config: &SkilletConfig) -> Vec<Diagnostic
         .iter()
         .filter_map(|(frag_name, &tokens)| {
             if tokens > config.lint.max_fragment_tokens {
-                Some(diag(
+                let path = ws
+                    .fragment_paths
+                    .get(frag_name)
+                    .map(|p| p.to_string_lossy().to_string());
+                Some(diag_located(
                     Severity::Warning,
                     "<workspace>",
                     "oversized-fragment",
@@ -59,6 +69,9 @@ pub fn check_fragments(ws: &Workspace, config: &SkilletConfig) -> Vec<Diagnostic
                         "fragment '{frag_name}' is ~{tokens} tokens (limit: {})",
                         config.lint.max_fragment_tokens
                     ),
+                    path,
+                    Some(1),
+                    None,
                 ))
             } else {
                 None

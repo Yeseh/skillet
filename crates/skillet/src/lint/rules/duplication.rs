@@ -7,7 +7,7 @@
 
 use crate::lockfile::Lockfile;
 
-use super::{CompiledSkill, Diagnostic, Severity};
+use super::{CompiledSkill, Diagnostic, RelatedLocation, Severity};
 
 // ── Detection constants ───────────────────────────────────────────────────────
 
@@ -164,6 +164,9 @@ pub fn check(
 
     // ── Emit diagnostics ──────────────────────────────────────────────────────
 
+    let skill_by_name: std::collections::HashMap<&str, &CompiledSkill> =
+        compiled.iter().map(|cs| (cs.name.as_str(), cs)).collect();
+
     let mut diags: Vec<Diagnostic> = clusters
         .into_iter()
         .filter(|c| c.skills.len() >= 2)
@@ -174,22 +177,84 @@ pub fn check(
             let msg = format!(
                 "passage shared across skills [{affected}]: \"{excerpt}…\" — consider extracting to a fragment"
             );
+
+            let mut primary_path: Option<String> = None;
+            let mut primary_line: Option<u32> = None;
+            let mut related: Vec<RelatedLocation> = Vec::new();
+
+            for skill_name in &affected_skills {
+                let Some(cs) = skill_by_name.get(skill_name.as_str()) else {
+                    continue;
+                };
+                if cs.source_path.as_os_str().is_empty() {
+                    continue;
+                }
+                let path_str = cs.source_path.to_string_lossy().to_string();
+                let line = find_passage_line(&cs.raw, &c.passage).or(Some(1));
+                if primary_path.is_none() {
+                    primary_path = Some(path_str);
+                    primary_line = line;
+                } else {
+                    related.push(RelatedLocation {
+                        path: path_str,
+                        line,
+                        col: None,
+                        message: format!("duplicated passage also appears in skill '{skill_name}'"),
+                    });
+                }
+            }
+
             Diagnostic {
                 rule: "duplication".to_string(),
                 severity: Severity::Warning,
                 skill: "<workspace>".to_string(),
                 message: msg,
-                path: None,
-                line: None,
+                path: primary_path,
+                line: primary_line,
                 col: None,
                 duplicated_text: Some(c.passage),
                 affected_skills: Some(affected_skills),
+                related: if related.is_empty() {
+                    None
+                } else {
+                    Some(related)
+                },
             }
         })
         .collect();
 
     diags.sort_by(|a, b| a.message.cmp(&b.message));
     (diags, updated_sigs)
+}
+
+/// Finds the 1-based line number in `raw` where a normalised `passage` begins.
+fn find_passage_line(raw: &str, passage: &str) -> Option<u32> {
+    let needle: String = passage
+        .split_whitespace()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if needle.is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = raw.lines().collect();
+    for (idx, window) in lines.windows(2).enumerate() {
+        let joined = normalise(&format!("{} {}", window[0], window[1]));
+        if joined.contains(&needle) {
+            // Check whether the match starts on the first or second line.
+            if normalise(window[1]).contains(&needle) && !normalise(window[0]).contains(&needle) {
+                return Some((idx + 2) as u32);
+            }
+            return Some((idx + 1) as u32);
+        }
+    }
+    if let Some(last) = lines.last() {
+        if normalise(last).contains(&needle) {
+            return Some(lines.len() as u32);
+        }
+    }
+    None
 }
 
 // ── MinHash ───────────────────────────────────────────────────────────────────

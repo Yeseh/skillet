@@ -193,3 +193,128 @@ fn lint_no_duplication_warning_for_unique_skills() {
         "unexpected duplication warning for unique skills"
     );
 }
+
+#[test]
+fn lint_json_includes_exact_locations_for_frontmatter_and_stale_build() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    let skill_dir = tmp.path().join("src/skills/my-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    let pan_path = skill_dir.join("my-skill.pan");
+    fs::write(
+        &pan_path,
+        "---\ndescription: \"\"\nname: wrong-name\n---\n\n# body\n",
+    )
+    .unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["lint", "--format", "json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let arr: Vec<serde_json::Value> = serde_json::from_str(stdout.trim()).expect("valid JSON");
+
+    // Assert — invalid-frontmatter points to exact lines in my-skill.pan
+    let name_diag = arr
+        .iter()
+        .find(|d| {
+            d["rule"] == "invalid-frontmatter"
+                && d["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("does not match")
+        })
+        .expect("expected name mismatch diagnostic");
+    assert_eq!(name_diag["path"].as_str(), pan_path.to_str());
+    assert_eq!(name_diag["line"].as_u64(), Some(3));
+
+    let desc_diag = arr
+        .iter()
+        .find(|d| {
+            d["rule"] == "invalid-frontmatter"
+                && d["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("description")
+        })
+        .expect("expected empty description diagnostic");
+    assert_eq!(desc_diag["path"].as_str(), pan_path.to_str());
+    assert_eq!(desc_diag["line"].as_u64(), Some(2));
+
+    // Assert — stale-build points to my-skill.pan
+    let stale_diag = arr
+        .iter()
+        .find(|d| d["rule"] == "stale-build")
+        .expect("expected stale-build diagnostic");
+    assert_eq!(stale_diag["path"].as_str(), pan_path.to_str());
+    assert_eq!(stale_diag["line"].as_u64(), Some(1));
+}
+
+#[test]
+fn lint_json_includes_paths_for_unused_fragment_and_unused_reference() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+    let frag_path = tmp.path().join("src/skills/_fragments/orphan.fragment.pan");
+    fs::create_dir_all(frag_path.parent().unwrap()).unwrap();
+    fs::write(&frag_path, "Unused fragment content.\n").unwrap();
+    let ref_path = tmp.path().join("src/skills/my-skill/references/unused.pan");
+    fs::create_dir_all(ref_path.parent().unwrap()).unwrap();
+    fs::write(&ref_path, "Unused reference content.\n").unwrap();
+    common::run_skillet(tmp.path(), &["build"]);
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["lint", "--format", "json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let arr: Vec<serde_json::Value> = serde_json::from_str(stdout.trim()).expect("valid JSON");
+
+    // Assert
+    let frag_diag = arr
+        .iter()
+        .find(|d| d["rule"] == "unused-fragment")
+        .expect("expected unused-fragment diagnostic");
+    assert_eq!(frag_diag["path"].as_str(), frag_path.to_str());
+    assert_eq!(frag_diag["line"].as_u64(), Some(1));
+
+    let ref_diag = arr
+        .iter()
+        .find(|d| d["rule"] == "unused-reference")
+        .expect("expected unused-reference diagnostic");
+    assert_eq!(ref_diag["path"].as_str(), ref_path.to_str());
+    assert_eq!(ref_diag["line"].as_u64(), Some(1));
+}
+
+#[test]
+fn lint_duplication_json_includes_locations_and_related() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    write_skill(tmp.path(), "alpha", &format!("# Intro\n\n{SHARED_PASSAGE}"));
+    write_skill(
+        tmp.path(),
+        "beta",
+        &format!("# Heading\n\n## Subheading\n\n{SHARED_PASSAGE}"),
+    );
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["lint", "--format", "json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let arr: Vec<serde_json::Value> = serde_json::from_str(stdout.trim()).expect("valid JSON");
+
+    // Assert
+    let dup = arr
+        .iter()
+        .find(|d| d["rule"] == "duplication")
+        .expect("expected duplication diagnostic");
+    let alpha_path = tmp.path().join("src/skills/alpha/alpha.pan");
+    let beta_path = tmp.path().join("src/skills/beta/beta.pan");
+    assert_eq!(dup["path"].as_str(), alpha_path.to_str());
+    assert_eq!(dup["line"].as_u64(), Some(8));
+
+    let related = dup["related"]
+        .as_array()
+        .expect("expected related locations on duplication diagnostic");
+    assert_eq!(related.len(), 1);
+    assert_eq!(related[0]["path"].as_str(), beta_path.to_str());
+    assert_eq!(related[0]["line"].as_u64(), Some(10));
+}
