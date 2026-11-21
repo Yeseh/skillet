@@ -660,7 +660,7 @@ fn parsed_symbol(node: &Node, body: &str) -> Option<(SymbolKind, String, ByteRan
             let leading = value.len() - value.trim_start().len();
             let start = value_start + leading;
             let end = start + name.len();
-            Some((
+            raw.starts_with('`').then_some((
                 symbol_kind,
                 name.to_string(),
                 ByteRange {
@@ -669,7 +669,6 @@ fn parsed_symbol(node: &Node, body: &str) -> Option<(SymbolKind, String, ByteRan
                 },
                 ByteRange { start, end },
             ))
-            .filter(|_| raw.starts_with('`'))
         }
         Node::Fragment {
             value,
@@ -679,7 +678,7 @@ fn parsed_symbol(node: &Node, body: &str) -> Option<(SymbolKind, String, ByteRan
             let raw = &body[source_range.start as usize..source_range.end as usize];
             let start = source_range.start as usize + 2 + value.len() - value.trim_start().len();
             let end = start + name.len();
-            Some((
+            raw.starts_with("{>").then_some((
                 SymbolKind::Fragment,
                 name.to_string(),
                 ByteRange {
@@ -688,7 +687,6 @@ fn parsed_symbol(node: &Node, body: &str) -> Option<(SymbolKind, String, ByteRan
                 },
                 ByteRange { start, end },
             ))
-            .filter(|_| raw.starts_with("{>"))
         }
         _ => None,
     }
