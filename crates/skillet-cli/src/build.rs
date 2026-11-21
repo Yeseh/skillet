@@ -238,7 +238,11 @@ fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> 
             compiled_hash,
             discovery_tokens: output.discovery_tokens,
             activation_tokens: output.activation_tokens,
-            transitive_tokens: 0,
+            transitive_tokens: skillet::budget::transitive_tokens(
+                output.activation_tokens,
+                &skill.references,
+                &ws.tokenizer,
+            ),
             fragments_used: output.fragments_used,
             refs,
             minhash: old_minhash,

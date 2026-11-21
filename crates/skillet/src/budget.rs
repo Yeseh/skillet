@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::frontmatter::parse_frontmatter;
 use crate::lockfile::{ArtefactEntry, Lockfile};
 use crate::tokens::count_tokens;
+use crate::workspace::skill::Reference;
 use crate::workspace::{Agent, Skill, Workspace};
 
 // ── Data types ──────────────────────────────────────────────────────────────
@@ -82,6 +83,25 @@ pub fn compute_rows(
         rows.push(compute_row(skill, ws, lockfile, tokenizer)?);
     }
     Ok(rows)
+}
+
+/// Computes a skill's transitive token cost: its compiled SKILL.md tokens plus
+/// the tokens of every file under its `references/` directory.
+///
+/// Every `.pan`/`.md` file under `references/` is bundled into the built skill,
+/// and `ref::name` directives can only target those files, so the full set of
+/// reference files is the transitive cost — counting `ref::` targets separately
+/// would double-count the ones that are referenced.
+pub fn transitive_tokens(compiled_tokens: u32, references: &[Reference], tokenizer: &str) -> u32 {
+    let references_tokens: u32 = references
+        .iter()
+        .filter_map(|r| {
+            std::fs::read_to_string(&r.absolute_path)
+                .ok()
+                .map(|t| count_tokens(&t, tokenizer))
+        })
+        .sum();
+    compiled_tokens + references_tokens
 }
 
 /// Computes budget rows for the given agents (all if `agent_name` is `None`).
@@ -155,19 +175,19 @@ fn compute_agent_row_from_disk(
     Ok(row_from_compiled(
         &agent.name,
         &compiled,
-        0,
+        &[],
         frag_names,
         ws,
         tokenizer,
     ))
 }
 
-/// Builds a row by counting tokens in compiled text. `extra_transitive` is the
-/// token count of files the artefact makes the agent read (skill references).
+/// Builds a row by counting tokens in compiled text. `references` are the files
+/// the artefact makes the agent read (skill references; none for agents).
 fn row_from_compiled(
     name: &str,
     compiled: &str,
-    extra_transitive: u32,
+    references: &[Reference],
     frag_names: &[String],
     ws: &Workspace,
     tokenizer: &str,
@@ -195,7 +215,7 @@ fn row_from_compiled(
         name: name.to_string(),
         discovery: count_tokens(&discovery_text, tokenizer),
         activation: compiled_tokens.saturating_sub(frag_tokens_total),
-        transitive: compiled_tokens + extra_transitive,
+        transitive: transitive_tokens(compiled_tokens, references, tokenizer),
         fragments,
     }
 }
@@ -231,20 +251,6 @@ fn compute_row_from_disk(
         )
     })?;
 
-    // Every `.pan`/`.md` file under `references/` is bundled into the built skill,
-    // and `ref::name` directives can only target those files, so the full set of
-    // reference files is the transitive cost — counting `ref::` targets separately
-    // would double-count the ones that are referenced.
-    let references_tokens: u32 = skill
-        .references
-        .iter()
-        .filter_map(|r| {
-            std::fs::read_to_string(&r.absolute_path)
-                .ok()
-                .map(|t| count_tokens(&t, tokenizer))
-        })
-        .sum();
-
     let frag_names = lockfile
         .skills
         .get(&skill.name)
@@ -254,7 +260,7 @@ fn compute_row_from_disk(
     Ok(row_from_compiled(
         &skill.name,
         &compiled,
-        references_tokens,
+        &skill.references,
         frag_names,
         ws,
         tokenizer,

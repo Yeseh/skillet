@@ -2,7 +2,7 @@
 
 [meta]
 skillet_version = "0.1.0"
-built_at = "2026-11-21T10:20:53.393929476Z"
+built_at = "2026-11-21T11:10:47.486849538Z"
 tokenizer = "cl100k_base"
 
 [skills.migrate]
@@ -10,7 +10,7 @@ source_hash = "sha256:a18975a39cc7cf3f7a95d204418769582ed334b4e66ee36fed0dc2f9c4
 compiled_hash = "sha256:2b5bce7a3e316e1e769cacfc744d8b0864790e256fe7db361aeb9e02336076b0"
 discovery_tokens = 22
 activation_tokens = 1527
-transitive_tokens = 0
+transitive_tokens = 1527
 fragments_used = []
 
 [skills.migrate.refs]
@@ -21,7 +21,7 @@ source_hash = "sha256:d4e4caedc6aca045676cd27b3c49ae567b5d15a25aa4f304a3420b8159
 compiled_hash = "sha256:6781bfe8ba190bcc03ec939fd28d356ad5336232e9b06e614b6c92e19907addc"
 discovery_tokens = 9
 activation_tokens = 538
-transitive_tokens = 0
+transitive_tokens = 538
 fragments_used = []
 
 [skills.skillet-shim]
@@ -29,7 +29,7 @@ source_hash = "sha256:64462579cc37c01a5349ff2864029e9b462d8499cc1fb48fafb0eba493
 compiled_hash = "sha256:2a949cb02511447c0d8e12a8f09f482ea4d07cbc7d702ba661f0c4e6d876dd60"
 discovery_tokens = 14
 activation_tokens = 145
-transitive_tokens = 0
+transitive_tokens = 145
 fragments_used = []
 minhash = [
     4916849018999047214,
