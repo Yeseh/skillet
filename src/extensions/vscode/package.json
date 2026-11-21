@@ -32,6 +32,11 @@
           "meta.embedded.block.yaml": "yaml",
           "meta.embedded.block.markdown": "markdown"
         }
+      },
+      {
+        "scopeName": "pan.injection",
+        "path": "./syntaxes/pan-injection.tmLanguage.json",
+        "injectTo": ["text.html.pan"]
       }
     ],
     "configuration": {
