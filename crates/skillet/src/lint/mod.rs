@@ -14,6 +14,10 @@
 //! `skillet check`.  Only the genuinely lint-specific concerns
 //! (frontmatter validity, untyped-backtick hints, size budgets, unused
 //! fragments, cross-skill duplication) live in the `rules` submodule.
+//!
+//! Agent sources go through the same `check` and `compile` stages, then
+//! through [`AgentDefinition::parse`]; each [`AgentError`](crate::agent::AgentError)
+//! code becomes an `agent-{code}` rule.
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -21,6 +25,7 @@ use std::path::PathBuf;
 
 use rayon::prelude::*;
 
+use crate::agent::AgentDefinition;
 use crate::compiler::check::{check_source_file, CheckDiag, CheckKind};
 use crate::compiler::compile::{compile, CompileOutput};
 use crate::compiler::PanSource;
@@ -28,7 +33,7 @@ use crate::config::SkilletConfig;
 use crate::freshness;
 use crate::lockfile::Lockfile;
 use crate::refs::ParsedRefs;
-use crate::workspace::{Skill, Workspace};
+use crate::workspace::{Agent, Skill, Workspace};
 
 /// Individual lint rule implementations.
 pub mod rules;
@@ -43,8 +48,8 @@ pub mod rules;
 pub struct CompiledSkill {
     /// Skill name (directory name).
     pub name: String,
-    /// Module this skill belongs to.
-    pub module: String,
+    /// Plugin this skill belongs to.
+    pub plugin: String,
     /// Absolute path to the `.pan` source file.
     pub source_path: PathBuf,
     /// Raw source content (empty if unreadable).
@@ -68,7 +73,7 @@ fn compile_skill(skill: &Skill, ws: &Workspace) -> CompiledSkill {
 
     CompiledSkill {
         name: skill.name.clone(),
-        module: skill.module.clone(),
+        plugin: skill.plugin.clone(),
         source_path: skill.source_path.clone(),
         raw,
         check_diags,
@@ -145,8 +150,8 @@ pub struct LintOptions {
     pub format: OutputFormat,
     /// Single-skill mode: lint only this skill, skipping workspace rules.
     pub skill: Option<String>,
-    /// Single-module mode: lint only skills in this module.
-    pub module: Option<String>,
+    /// Single-plugin mode: lint only skills in this plugin.
+    pub plugin: Option<String>,
     /// Single-file mode: lint only this `.pan` file, skipping workspace rules.
     ///
     /// Used by editor integrations (e.g. `skillet lint --file <path>`).
@@ -163,7 +168,7 @@ impl LintOptions {
             pedantic,
             format,
             skill: None,
-            module: None,
+            plugin: None,
             file_path: None,
             verbose: false,
         }
@@ -195,30 +200,43 @@ pub fn lint(
     config: &SkilletConfig,
     opts: &LintOptions,
 ) -> LintOutput {
-    let targets: Vec<&Skill> = match (&opts.file_path, &opts.skill) {
-        (Some(path), _) => {
-            let abs = if path.is_absolute() {
-                path.clone()
-            } else {
-                ws.root.join(path)
-            };
-            ws.skills
-                .values()
-                .filter(|s| s.source_path == abs)
-                .collect()
+    let abs_file = opts.file_path.as_ref().map(|path| {
+        if path.is_absolute() {
+            path.clone()
+        } else {
+            ws.root.join(path)
         }
+    });
+
+    let targets: Vec<&Skill> = match (&abs_file, &opts.skill) {
+        (Some(abs), _) => ws
+            .skills
+            .values()
+            .filter(|s| &s.source_path == abs)
+            .collect(),
         (None, Some(name)) => ws.skills.values().filter(|s| &s.name == name).collect(),
         (None, None) => {
-            if let Some(module_name) = &opts.module {
+            if let Some(plugin_name) = &opts.plugin {
                 ws.skills
                     .values()
-                    .filter(|s| &s.module == module_name)
+                    .filter(|s| &s.plugin == plugin_name)
                     .collect()
             } else {
                 ws.skills.values().collect()
             }
         }
     };
+
+    let agent_targets: Vec<&Agent> = ws
+        .agents
+        .values()
+        .filter(|a| match (&abs_file, &opts.skill, &opts.plugin) {
+            (Some(abs), _, _) => &a.source_path == abs,
+            (None, Some(name), _) => &a.name == name,
+            (None, None, Some(plugin)) => &a.plugin == plugin,
+            (None, None, None) => true,
+        })
+        .collect();
 
     let run_workspace_rules = opts.file_path.is_none() && opts.skill.is_none();
     let target_names: HashSet<&str> = targets.iter().map(|s| s.name.as_str()).collect();
@@ -244,12 +262,15 @@ pub fn lint(
     );
 
     diagnostics.extend(workspace_diags);
+    diagnostics.extend(agent_targets.iter().flat_map(|a| lint_agent(a, ws)));
 
     // `stale-build` reuses the freshness verifier (the `skillet check` logic).
+    let agent_names: HashSet<&str> = agent_targets.iter().map(|a| a.name.as_str()).collect();
     diagnostics.extend(stale_build_diags(
         ws,
         lockfile,
         &target_names,
+        &agent_names,
         run_workspace_rules,
     ));
 
@@ -265,8 +286,6 @@ fn lint_skill_rules(
     config: &SkilletConfig,
     skill_names: &[&str],
 ) -> Vec<Diagnostic> {
-    use crate::refs::RefKind;
-
     let mut diags = Vec::new();
     let file_path = cs.source_path.to_string_lossy().to_string();
 
@@ -286,23 +305,23 @@ fn lint_skill_rules(
     diags.extend(rules::oversized::check_skill(cs, config));
     diags.extend(rules::oversized::check_description(cs, config));
 
-    // cross-module-fragment-ref: warn when a module skill uses a workspace-global fragment.
+    // cross-plugin-fragment-ref: warn when a plugin skill uses a workspace-global fragment.
     if !ws.global_fragment_names.is_empty() {
-        let module_local = ws.module_fragment_names.get(&cs.module);
+        let plugin_local = ws.plugin_fragment_names.get(&cs.plugin);
         for frag_name in &cs.output.fragments_used {
             if ws.global_fragment_names.contains(frag_name) {
-                let is_also_local = module_local
+                let is_also_local = plugin_local
                     .map(|s| s.contains(frag_name.as_str()))
                     .unwrap_or(false);
                 if !is_also_local {
                     diags.push(diag(
                         Severity::Warning,
                         &cs.name,
-                        "cross-module-fragment-ref",
+                        "cross-plugin-fragment-ref",
                         format!(
                             "fragment '{{{{> {frag_name} }}}}' is workspace-global and will not \
-                             be available when module '{}' is published standalone",
-                            cs.module
+                             be available when plugin '{}' is published standalone",
+                            cs.plugin
                         ),
                     ));
                 }
@@ -310,30 +329,99 @@ fn lint_skill_rules(
         }
     }
 
-    // cross-module-skill-ref: error when a skill:: ref targets a skill in a different module.
-    for typed_ref in cs
-        .parsed_refs
+    diags.extend(cross_plugin_skill_refs(
+        &cs.name,
+        &cs.plugin,
+        &cs.parsed_refs,
+        ws,
+        &file_path,
+    ));
+
+    diags
+}
+
+/// cross-plugin-skill-ref: error when a `skill::` ref targets a skill in a different plugin.
+fn cross_plugin_skill_refs(
+    name: &str,
+    plugin: &str,
+    parsed_refs: &ParsedRefs,
+    ws: &Workspace,
+    file_path: &str,
+) -> Vec<Diagnostic> {
+    use crate::refs::RefKind;
+
+    parsed_refs
         .typed
         .iter()
         .filter(|r| r.kind == RefKind::Skill)
-    {
-        if let Some(target) = ws.skills.get(&typed_ref.value) {
-            if target.module != cs.module {
-                diags.push(diag_located(
+        .filter_map(|typed_ref| {
+            let target = ws.skills.get(&typed_ref.value)?;
+            (target.plugin != plugin).then(|| {
+                diag_located(
                     Severity::Error,
-                    &cs.name,
-                    "cross-module-skill-ref",
+                    name,
+                    "cross-plugin-skill-ref",
                     format!(
-                        "`skill::{}` is in module '{}' and cannot be referenced from module '{}'",
-                        typed_ref.value, target.module, cs.module
+                        "`skill::{}` is in plugin '{}' and cannot be referenced from plugin '{}'",
+                        typed_ref.value, target.plugin, plugin
                     ),
-                    Some(file_path.clone()),
+                    Some(file_path.to_string()),
                     Some(typed_ref.line),
                     Some(typed_ref.col),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Lints one agent source: referential integrity, the agent definition rules
+/// (`agent-{code}`), Claude Code field support, and cross-plugin skill refs.
+fn lint_agent(agent: &Agent, ws: &Workspace) -> Vec<Diagnostic> {
+    let file_path = agent.source_path.to_string_lossy().to_string();
+    let raw = std::fs::read_to_string(&agent.source_path).unwrap_or_default();
+    let source = PanSource::new(raw.clone());
+
+    // An agent has no `references/` directory, so every `ref::` is reported.
+    let mut diags: Vec<Diagnostic> = check_source_file(ws, &source, &[])
+        .iter()
+        .map(|d| diag_from_check(&agent.name, &file_path, d))
+        .collect();
+
+    let output = compile(ws, &source, &[]);
+    match AgentDefinition::parse(&output.text, &agent.name) {
+        Err(e) => diags.push(diag_located(
+            Severity::Error,
+            &agent.name,
+            &format!("agent-{}", e.code()),
+            e.to_string(),
+            Some(file_path.clone()),
+            None,
+            None,
+        )),
+        Ok(def) => {
+            for field in def.claude_ignored_fields() {
+                diags.push(diag_located(
+                    Severity::Warning,
+                    &agent.name,
+                    "agent-field-ignored-by-claude",
+                    format!("Claude Code ignores '{field}' for agents loaded from a plugin"),
+                    Some(file_path.clone()),
+                    None,
+                    None,
                 ));
             }
         }
     }
+
+    let skill_names: Vec<&str> = ws.skills.keys().map(|s| s.as_str()).collect();
+    let parsed_refs = ParsedRefs::extract(&raw, &skill_names);
+    diags.extend(cross_plugin_skill_refs(
+        &agent.name,
+        &agent.plugin,
+        &parsed_refs,
+        ws,
+        &file_path,
+    ));
 
     diags
 }
@@ -386,15 +474,23 @@ fn stale_build_diags(
     ws: &Workspace,
     lockfile: &Lockfile,
     target_names: &HashSet<&str>,
+    agent_names: &HashSet<&str>,
     run_workspace_rules: bool,
 ) -> Vec<Diagnostic> {
     let report = freshness::verify(ws, lockfile);
 
-    report
+    let skills = report
         .skills
         .iter()
+        .filter(|r| run_workspace_rules || target_names.contains(r.name.as_str()));
+    let agents = report
+        .agents
+        .iter()
+        .filter(|r| run_workspace_rules || agent_names.contains(r.name.as_str()));
+
+    skills
+        .chain(agents)
         .filter(|r| !r.fresh)
-        .filter(|r| run_workspace_rules || target_names.contains(r.name.as_str()))
         .flat_map(|r| {
             r.reasons
                 .iter()

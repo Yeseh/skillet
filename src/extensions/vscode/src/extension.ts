@@ -100,15 +100,15 @@ function isPedantic(): boolean {
 
 /** Source/fragment directories extracted from `skillet.toml`. */
 interface WorkspaceDirs {
-  /** Module `src_dir` values (relative to workspace root). */
+  /** Plugin `src_dir` values (relative to workspace root). */
   srcDirs: string[];
-  /** Fragment directories (workspace-global + module-local), relative to root. */
+  /** Fragment directories (workspace-global + plugin-local), relative to root. */
   fragmentDirs: string[];
 }
 
 /**
  * Minimal `skillet.toml` reader.  Extracts only the keys go-to-definition
- * needs: every module's `src_dir`, plus the workspace-global and module-local
+ * needs: every plugin's `src_dir`, plus the workspace-global and plugin-local
  * `fragments_dir` values.  Handles the well-formed TOML that `skillet` emits;
  * not a general-purpose parser.
  */
@@ -140,12 +140,12 @@ function parseWorkspaceDirs(root: string): WorkspaceDirs {
     }
     const key = kv[1];
     const value = kv[2].trim().replace(/^["']|["']$/g, "");
-    const isModule = section.startsWith("module.");
-    if (key === "src_dir" && (isModule || section === "workspace")) {
+    const isPlugin = section.startsWith("plugin.");
+    if (key === "src_dir" && (isPlugin || section === "workspace")) {
       srcDirs.push(value);
     } else if (
       key === "fragments_dir" &&
-      (isModule || section === "workspace")
+      (isPlugin || section === "workspace")
     ) {
       fragmentDirs.push(value);
     }
@@ -161,7 +161,7 @@ function firstExisting(candidates: string[]): string | undefined {
 
 /**
  * Given the path of a `.pan` document, find its enclosing skill directory —
- * the directory directly under a module `src_dir` that contains the document.
+ * the directory directly under a plugin `src_dir` that contains the document.
  * Falls back to the document's own directory when it lives outside any
  * configured source dir.
  */

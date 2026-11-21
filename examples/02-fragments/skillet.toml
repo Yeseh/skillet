@@ -1,9 +1,6 @@
 allowed_commands = ["playwright", "docker", "kubectl"]
 
 [workspace]
-src_dir = "src/skills"
-out_dir = "skills"
-fragments_dir = "src/skills/_fragments"
 
 [lint]
 max_activation_tokens = 4000
@@ -22,3 +19,9 @@ project_name = "my-project"
 [env]
 CI = { default = "false" }
 TEAM_NAME = { default = "engineering" }
+
+[plugin.fragments]
+src_dir = "src/skills"
+out_dir = "skills"
+fragments_dir = "src/skills/_fragments"
+version = "0.1.0"

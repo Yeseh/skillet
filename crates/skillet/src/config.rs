@@ -6,11 +6,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 /// Global workspace settings. Owns only workspace-wide concerns.
-/// Source and output directories live in `[module.*]` sections.
+/// Source and output directories live in `[plugin.*]` sections.
 #[non_exhaustive]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// Path to workspace-global fragment files, shared across all modules.
+    /// Path to workspace-global fragment files, shared across all plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragments_dir: Option<String>,
     /// Plugin marketplace publish settings.
@@ -34,25 +34,28 @@ pub struct PublishConfig {
     pub owner_email: Option<String>,
 }
 
-/// Per-module source/output configuration.
+/// Per-plugin source/output configuration.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModuleConfig {
+pub struct PluginConfig {
     /// Path (relative to workspace root) where source `.pan` files live.
     pub src_dir: String,
     /// Path (relative to workspace root) where compiled outputs are written.
     pub out_dir: String,
-    /// Published version of this module.
+    /// Published version of this plugin.
     pub version: String,
-    /// Path to module-local fragment files (overrides global fragments of the same name).
+    /// Path to plugin-local fragment files (overrides global fragments of the same name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragments_dir: Option<String>,
     /// Human-readable description written into `plugin.json` when publishing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Whether this module is included in the published marketplace.
+    /// Whether this plugin is included in the published marketplace.
     #[serde(default)]
     pub publish: bool,
+    /// Path (relative to workspace root) where `{name}.agent.pan` agent sources live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_dir: Option<String>,
 }
 
 /// Linting rules applied during `skillet lint`.
@@ -96,12 +99,12 @@ pub struct SkilletConfig {
     /// Global workspace settings.
     #[serde(default)]
     pub workspace: WorkspaceConfig,
-    /// Named modules, each declaring a source/output pair.
-    #[serde(default, rename = "module")]
-    pub modules: BTreeMap<String, ModuleConfig>,
-    /// Linting configuration (inherited by all modules).
+    /// Named plugins, each declaring a source/output pair.
+    #[serde(default, rename = "plugin")]
+    pub plugins: BTreeMap<String, PluginConfig>,
+    /// Linting configuration (inherited by all plugins).
     pub lint: LintConfig,
-    /// Build configuration (inherited by all modules).
+    /// Build configuration (inherited by all plugins).
     pub build: BuildConfig,
     /// Freeform template variables available inside skill templates.
     #[serde(default)]
@@ -116,22 +119,23 @@ pub struct SkilletConfig {
 
 impl Default for SkilletConfig {
     fn default() -> Self {
-        let mut modules = BTreeMap::new();
-        modules.insert(
+        let mut plugins = BTreeMap::new();
+        plugins.insert(
             "default".to_string(),
-            ModuleConfig {
+            PluginConfig {
                 src_dir: "src/skills".to_string(),
                 out_dir: "skills".to_string(),
                 version: "0.1.0".to_string(),
                 fragments_dir: Some("src/skills/_fragments".to_string()),
                 description: None,
                 publish: false,
+                agents_dir: None,
             },
         );
 
         SkilletConfig {
             workspace: WorkspaceConfig::default(),
-            modules,
+            plugins,
             lint: LintConfig {
                 max_activation_tokens: 4000,
                 max_discovery_tokens: 100,
@@ -173,10 +177,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_has_one_module_with_expected_dirs() {
+    fn default_has_one_plugin_with_expected_dirs() {
         let cfg = SkilletConfig::default();
-        assert_eq!(cfg.modules.len(), 1);
-        let m = cfg.modules.get("default").expect("default module");
+        assert_eq!(cfg.plugins.len(), 1);
+        let m = cfg.plugins.get("default").expect("default plugin");
         assert_eq!(m.src_dir, "src/skills");
         assert_eq!(m.out_dir, "skills");
         assert_eq!(m.fragments_dir.as_deref(), Some("src/skills/_fragments"));
@@ -205,17 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn to_toml_round_trips_module_config() {
+    fn to_toml_round_trips_plugin_config() {
         let cfg = SkilletConfig::default();
         let toml_str = cfg.to_toml().unwrap();
         let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
 
         assert_eq!(
-            parsed["module"]["default"]["src_dir"].as_str().unwrap(),
+            parsed["plugin"]["default"]["src_dir"].as_str().unwrap(),
             "src/skills"
         );
         assert_eq!(
-            parsed["module"]["default"]["out_dir"].as_str().unwrap(),
+            parsed["plugin"]["default"]["out_dir"].as_str().unwrap(),
             "skills"
         );
         assert_eq!(
@@ -225,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_multi_module_toml() {
+    fn parse_multi_plugin_toml() {
         let toml_str = r#"
 [workspace]
 
@@ -237,26 +241,26 @@ max_fragment_tokens = 500
 [build]
 tokenizer = "cl100k_base"
 
-[module.core]
+[plugin.core]
 src_dir = "src/skills"
 out_dir = "skills"
 version = "1.0.0"
 
-[module.plugin]
+[plugin.extras]
 src_dir = "plugin/src"
 out_dir = "plugin/out"
 version = "0.2.0"
 fragments_dir = "plugin/src/_fragments"
 "#;
         let cfg: SkilletConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.modules.len(), 2);
-        let core = cfg.modules.get("core").unwrap();
+        assert_eq!(cfg.plugins.len(), 2);
+        let core = cfg.plugins.get("core").unwrap();
         assert_eq!(core.src_dir, "src/skills");
         assert_eq!(core.version, "1.0.0");
         assert!(core.fragments_dir.is_none());
-        let plugin = cfg.modules.get("plugin").unwrap();
+        let extras = cfg.plugins.get("extras").unwrap();
         assert_eq!(
-            plugin.fragments_dir.as_deref(),
+            extras.fragments_dir.as_deref(),
             Some("plugin/src/_fragments")
         );
     }

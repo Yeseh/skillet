@@ -49,9 +49,9 @@ enum Commands {
     New {
         /// Name of the skill to create
         name: String,
-        /// Module to create the skill in (required when multiple modules exist)
+        /// Plugin to create the skill in (required when multiple plugins exist)
         #[arg(long)]
-        module: Option<String>,
+        plugin: Option<String>,
         /// Output format
         #[arg(long)]
         format: Option<FormatArg>,
@@ -60,9 +60,9 @@ enum Commands {
     Build {
         /// Name of a single skill to compile (compiles all if omitted)
         name: Option<String>,
-        /// Only build skills from this module
+        /// Only build skills from this plugin
         #[arg(long)]
-        module: Option<String>,
+        plugin: Option<String>,
         /// Disable URL verification regardless of config
         #[arg(long)]
         offline: bool,
@@ -73,22 +73,22 @@ enum Commands {
         #[arg(long)]
         format: Option<FormatArg>,
     },
-    /// Show token budget for skills in the workspace
+    /// Show token budget for skills and agents in the workspace
     Budget {
-        /// Name of a single skill to show (shows all if omitted)
+        /// Name of a single skill or agent to show (shows all if omitted)
         name: Option<String>,
-        /// Only show skills from this module
+        /// Only show skills and agents from this plugin
         #[arg(long)]
-        module: Option<String>,
+        plugin: Option<String>,
         /// Output format
         #[arg(long)]
         format: Option<FormatArg>,
     },
-    /// Verify compiled SKILL.md files are up-to-date with their sources
+    /// Verify compiled skills and agents are up-to-date with their sources
     Check {
-        /// Only check skills from this module
+        /// Only check skills from this plugin
         #[arg(long)]
-        module: Option<String>,
+        plugin: Option<String>,
         /// Output format
         #[arg(long)]
         format: Option<FormatArg>,
@@ -112,9 +112,9 @@ enum Commands {
     Lint {
         /// Name of a single skill to lint (lints all if omitted)
         name: Option<String>,
-        /// Only lint skills from this module
+        /// Only lint skills from this plugin
         #[arg(long)]
-        module: Option<String>,
+        plugin: Option<String>,
         /// Lint only this specific source file (single-file mode for editors)
         #[arg(long, value_name = "PATH")]
         file: Option<std::path::PathBuf>,
@@ -143,18 +143,18 @@ fn main() -> Result<()> {
         }
         Commands::New {
             name,
-            module,
+            plugin,
             format,
         } => {
             let cwd = std::env::current_dir()?;
             let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let json = matches!(format, Some(FormatArg::Json));
-            let skills_src_dir = resolve_module_src_dir(&cwd, &cfg, module.as_deref())?;
+            let skills_src_dir = resolve_plugin_src_dir(&cwd, &cfg, plugin.as_deref())?;
             new::run(&skills_src_dir, &name, json)?;
         }
         Commands::Build {
             name,
-            module,
+            plugin,
             offline,
             strict,
             format,
@@ -166,23 +166,23 @@ fn main() -> Result<()> {
                 None => build::OutputFormat::Text,
             };
             let opts = build::BuildOptions::new_with_format(offline, strict, fmt.clone());
-            build::run(&cwd, name.as_deref(), module.as_deref(), &opts, &cfg)?;
+            build::run(&cwd, name.as_deref(), plugin.as_deref(), &opts, &cfg)?;
         }
-        Commands::Check { module, format } => {
+        Commands::Check { plugin, format } => {
             let cwd = std::env::current_dir()?;
             let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => check::OutputFormat::Json,
                 None => check::OutputFormat::Text,
             };
-            let fresh = check::run(&cwd, module.as_deref(), fmt, &cfg)?;
+            let fresh = check::run(&cwd, plugin.as_deref(), fmt, &cfg)?;
             if !fresh {
                 std::process::exit(1);
             }
         }
         Commands::Budget {
             name,
-            module,
+            plugin,
             format,
         } => {
             let cwd = std::env::current_dir()?;
@@ -191,7 +191,7 @@ fn main() -> Result<()> {
                 Some(FormatArg::Json) => budget::OutputFormat::Json,
                 None => budget::OutputFormat::Text,
             };
-            budget::run(&cwd, name.as_deref(), module.as_deref(), fmt, &cfg)?;
+            budget::run(&cwd, name.as_deref(), plugin.as_deref(), fmt, &cfg)?;
         }
         Commands::Publish { no_build, format } => {
             let cwd = std::env::current_dir()?;
@@ -215,7 +215,7 @@ fn main() -> Result<()> {
         },
         Commands::Lint {
             name,
-            module,
+            plugin,
             file,
             strict,
             pedantic,
@@ -231,7 +231,7 @@ fn main() -> Result<()> {
             let mut opts = lint::LintOptions::new(strict, pedantic, fmt);
             opts.file_path = file;
             opts.verbose = verbose;
-            let clean = lint::run(&cwd, name.as_deref(), module.as_deref(), &opts, &cfg)?;
+            let clean = lint::run(&cwd, name.as_deref(), plugin.as_deref(), &opts, &cfg)?;
             if !clean {
                 std::process::exit(1);
             }
@@ -240,31 +240,31 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Resolves which module's `src_dir` to use for `skillet new`.
+/// Resolves which plugin's `src_dir` to use for `skillet new`.
 ///
-/// If `--module` is specified, uses that module. If there is exactly one module,
-/// uses it implicitly. Otherwise, errors asking for an explicit `--module` flag.
-fn resolve_module_src_dir(
+/// If `--plugin` is specified, uses that plugin. If there is exactly one plugin,
+/// uses it implicitly. Otherwise, errors asking for an explicit `--plugin` flag.
+fn resolve_plugin_src_dir(
     workspace: &std::path::Path,
     cfg: &skillet::config::SkilletConfig,
-    module_name: Option<&str>,
+    plugin_name: Option<&str>,
 ) -> Result<std::path::PathBuf> {
-    if let Some(name) = module_name {
-        match cfg.modules.get(name) {
+    if let Some(name) = plugin_name {
+        match cfg.plugins.get(name) {
             Some(m) => return Ok(workspace.join(&m.src_dir)),
-            None => bail!("module '{}' not found in skillet.toml", name),
+            None => bail!("plugin '{}' not found in skillet.toml", name),
         }
     }
 
-    match cfg.modules.len() {
-        0 => bail!("no modules defined in skillet.toml — add a [module.*] section"),
+    match cfg.plugins.len() {
+        0 => bail!("no plugins defined in skillet.toml — add a [plugin.*] section"),
         1 => {
-            let m = cfg.modules.values().next().unwrap();
+            let m = cfg.plugins.values().next().unwrap();
             Ok(workspace.join(&m.src_dir))
         }
         _ => bail!(
-            "multiple modules defined — use --module <name> to specify which one (available: {})",
-            cfg.modules.keys().cloned().collect::<Vec<_>>().join(", ")
+            "multiple plugins defined — use --plugin <name> to specify which one (available: {})",
+            cfg.plugins.keys().cloned().collect::<Vec<_>>().join(", ")
         ),
     }
 }
