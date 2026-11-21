@@ -76,6 +76,7 @@ cargo test --locked
 - CI treats every clippy warning as an error. A warning is a failure, not a note.
 - Do not dismiss a failing check as "pre-existing". Fix it, or stop and report it to the human as a blocker for CI.
 - If `cargo fmt --check` reports files you did not change, do not reformat or revert them. Report them.
+- CI uses the latest stable Rust toolchain. If CI fails but your local run passes, run `rustup update stable` and try again before you look for other causes.
 - When you change this list, change `ci.yml` too, and the other way around.
 
 ---
