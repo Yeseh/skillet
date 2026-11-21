@@ -118,19 +118,19 @@ Open `skillet.toml` and tune it for the project.  The default file written by
 `skillet init` is a starting point; adjust each section as needed.
 
 **`[workspace]`** — workspace-wide settings. The only path it owns is the
-global fragments directory; source and output paths live per-module:
+global fragments directory; source and output paths live per-plugin:
 
 ```toml
 [workspace]
 fragments_dir = "src/skills/_fragments"
 ```
 
-**`[module.<name>]`** — each module declares its own source/output pair.
-`skillet init` writes a single `default` module; add or rename modules only if
+**`[plugin.<name>]`** — each plugin declares its own source/output pair.
+`skillet init` writes a single `default` plugin; add or rename plugins only if
 the project ships more than one source/output tree:
 
 ```toml
-[module.default]
+[plugin.default]
 src_dir = "src/skills"
 out_dir = "skills"
 version = "0.1.0"

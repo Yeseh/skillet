@@ -6,7 +6,7 @@ use tempfile::TempDir;
 fn setup_workspace(tmp: &std::path::Path) {
     let cfg = skillet::config::SkilletConfig::default();
     fs::write(tmp.join("skillet.toml"), cfg.to_toml().unwrap()).unwrap();
-    let m = cfg.modules.get("default").unwrap();
+    let m = cfg.plugins.get("default").unwrap();
     fs::create_dir_all(tmp.join(&m.src_dir)).unwrap();
     fs::create_dir_all(tmp.join(&m.out_dir)).unwrap();
     if let Some(frags) = &m.fragments_dir {
@@ -29,23 +29,23 @@ fn init_creates_skills_dir_fragments_dir_and_config() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Assert — filesystem layout (unchanged by the module model)
+    // Assert — filesystem layout (unchanged by the plugin model)
     assert!(tmp.path().join("src/skills").is_dir());
     assert!(tmp.path().join("src/skills/_fragments").is_dir());
     assert!(tmp.path().join("skills").is_dir());
     assert!(tmp.path().join("skillet.toml").is_file());
 
-    // Assert — config shape: one module with the expected dirs
+    // Assert — config shape: one plugin with the expected dirs
     let content = fs::read_to_string(tmp.path().join("skillet.toml")).unwrap();
     let parsed: toml::Value = toml::from_str(&content).unwrap();
 
-    let modules = parsed["module"].as_table().expect("module table");
-    assert_eq!(modules.len(), 1, "should have exactly one module");
-    let first_module = modules.values().next().unwrap();
-    assert_eq!(first_module["src_dir"].as_str().unwrap(), "src/skills");
-    assert_eq!(first_module["out_dir"].as_str().unwrap(), "skills");
+    let plugins = parsed["plugin"].as_table().expect("plugin table");
+    assert_eq!(plugins.len(), 1, "should have exactly one plugin");
+    let first_plugin = plugins.values().next().unwrap();
+    assert_eq!(first_plugin["src_dir"].as_str().unwrap(), "src/skills");
+    assert_eq!(first_plugin["out_dir"].as_str().unwrap(), "skills");
     assert_eq!(
-        first_module["fragments_dir"].as_str().unwrap(),
+        first_plugin["fragments_dir"].as_str().unwrap(),
         "src/skills/_fragments"
     );
 
@@ -76,7 +76,7 @@ fn init_refuses_to_overwrite_existing_skillet_toml() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("skillet.toml"),
-        "[workspace]\n\n[module.custom]\nsrc_dir = 'src/skills'\nout_dir = 'custom-skills'\nversion = '0.1.0'\n",
+        "[workspace]\n\n[plugin.custom]\nsrc_dir = 'src/skills'\nout_dir = 'custom-skills'\nversion = '0.1.0'\n",
     )
     .unwrap();
 

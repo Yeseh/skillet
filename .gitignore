@@ -27,3 +27,4 @@ rustc-ice-*.txt
 .py/goal
 
 .worktrees
+.claude/worktrees/

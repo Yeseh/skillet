@@ -2,12 +2,12 @@
 //! [`Workspace`] structure shared by the build and lint pipelines.
 //!
 //! Artifact types:
-//! - **Skills** — `.pan` files under `{module.src_dir}/{name}/{name}.pan`
-//! - **Scripts** — files under `{module.src_dir}/{skill}/scripts/`
-//! - **References** — `.pan` files under `{module.src_dir}/{skill}/references/**/*.pan`
-//! - **Agents** — `.pan` files under `agents/{name}/{name}.pan`
+//! - **Skills** — `.pan` files under `{plugin.src_dir}/{name}/{name}.pan`
+//! - **Scripts** — files under `{plugin.src_dir}/{skill}/scripts/`
+//! - **References** — `.pan` files under `{plugin.src_dir}/{skill}/references/**/*.pan`
+//! - **Agents** — `{name}.agent.pan` files directly under `{plugin.agents_dir}`
 //! - **Fragments** — `.fragment.pan` files under `workspace.fragments_dir` (global)
-//! or `module.fragments_dir` (module-local)
+//!   or `plugin.fragments_dir` (plugin-local)
 
 /// Skill, Script, and Reference type definitions.
 pub mod skill;
@@ -26,16 +26,18 @@ use crate::workspace::skill::{Reference, Script};
 
 // ── Artifact types ─────────────────────────────────────────────────────────────
 
-/// A discovered agent within the workspace.
+/// A discovered agent source within a plugin.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Agent {
-    /// The agent's name, used as its identifier.
+    /// The agent's name, taken from the `{name}.agent.pan` file name.
     pub name: String,
-    /// Absolute path to the `{name}.pan` source file.
+    /// The plugin this agent belongs to.
+    pub plugin: String,
+    /// Absolute path to the `{name}.agent.pan` source file.
     pub source_path: PathBuf,
-    /// The target path of the agent after compilation
-    pub target_path: PathBuf,
+    /// Absolute path to the owning plugin's `out_dir`.
+    pub out_dir: PathBuf,
 }
 
 /// Fully-resolved workspace: all artifacts discovered, fragments rendered,
@@ -60,8 +62,8 @@ pub struct Workspace {
     pub fragment_paths: HashMap<String, PathBuf>,
     /// Fragment names that come from the workspace-global `fragments_dir`.
     pub global_fragment_names: HashSet<String>,
-    /// Fragment names local to each module, keyed by module name.
-    pub module_fragment_names: HashMap<String, HashSet<String>>,
+    /// Fragment names local to each plugin, keyed by plugin name.
+    pub plugin_fragment_names: HashMap<String, HashSet<String>>,
     /// Variable substitutions from `[vars]` in `skillet.toml`.
     pub vars: BTreeMap<String, String>,
     /// Declared environment variables with defaults from `[env]`.
@@ -74,12 +76,10 @@ pub struct Workspace {
 
 impl Workspace {
     /// Resolves the full workspace from the given root directory and config.
-    /// Performs all filesystem I/O: discovers skills from every module, agents,
-    /// and fragments (global + per-module); renders fragments; scans source
+    /// Performs all filesystem I/O: discovers skills from every plugin, agents,
+    /// and fragments (global + per-plugin); renders fragments; scans source
     /// files for `cmd::` refs and probes PATH.
     pub fn resolve(root: &Path, cfg: &SkilletConfig) -> Result<Self> {
-        let agents_dir = root.join("agents");
-
         // ── Step 1: workspace-global fragments ─────────────────────────────
         let mut raw_fragments: HashMap<String, String> = HashMap::new();
         let mut fragment_paths: HashMap<String, PathBuf> = HashMap::new();
@@ -95,13 +95,14 @@ impl Workspace {
             }
         }
 
-        // ── Step 2: per-module skills and local fragments ───────────────────
+        // ── Step 2: per-plugin skills and local fragments ───────────────────
         let mut all_skills: Vec<Skill> = Vec::new();
-        let mut module_fragment_names: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut agents: HashMap<String, Agent> = HashMap::new();
+        let mut plugin_fragment_names: HashMap<String, HashSet<String>> = HashMap::new();
 
-        for (module_name, module_cfg) in &cfg.modules {
-            // Module-local fragments (override global for same name)
-            if let Some(frags_rel) = &module_cfg.fragments_dir {
+        for (plugin_name, plugin_cfg) in &cfg.plugins {
+            // Plugin-local fragments (override global for same name)
+            if let Some(frags_rel) = &plugin_cfg.fragments_dir {
                 let frags_dir = root.join(frags_rel);
                 let mod_frags = load_all_fragments_with_paths(&frags_dir)?;
                 let mut local_names = HashSet::new();
@@ -110,30 +111,33 @@ impl Workspace {
                     fragment_paths.insert(name.clone(), path);
                     raw_fragments.insert(name, content);
                 }
-                module_fragment_names.insert(module_name.clone(), local_names);
+                plugin_fragment_names.insert(plugin_name.clone(), local_names);
             }
 
-            let src_dir = root.join(&module_cfg.src_dir);
-            let out_dir = root.join(&module_cfg.out_dir);
+            let src_dir = root.join(&plugin_cfg.src_dir);
+            let out_dir = root.join(&plugin_cfg.out_dir);
             let mut skills = discover_skills(&src_dir, &out_dir)?;
             for skill in &mut skills {
-                skill.module = module_name.clone();
+                skill.plugin = plugin_name.clone();
             }
             all_skills.extend(skills);
+
+            // Agents: names are workspace-unique because the lockfile keys them by name.
+            if let Some(agents_rel) = &plugin_cfg.agents_dir {
+                for agent in discover_agents(&root.join(agents_rel), &out_dir, plugin_name)? {
+                    if let Some(other) = agents.get(&agent.name) {
+                        bail!(
+                            "agent '{}' is defined in plugin '{}' and plugin '{}'; \
+                             agent names must be unique in the workspace",
+                            agent.name,
+                            other.plugin,
+                            agent.plugin
+                        );
+                    }
+                    agents.insert(agent.name.clone(), agent);
+                }
+            }
         }
-
-        // ── Step 3: agents (workspace-level, use first module's out_dir) ───
-        let first_out_dir = cfg
-            .modules
-            .values()
-            .next()
-            .map(|m| root.join(&m.out_dir))
-            .unwrap_or_else(|| root.join("skills"));
-
-        let agents: HashMap<String, Agent> = discover_agents(&agents_dir, &first_out_dir)?
-            .into_iter()
-            .map(|a| (a.name.clone(), a))
-            .collect();
 
         // ── Step 4: render, hash, count fragments ───────────────────────────
         let rendered_fragments = render_fragments(&raw_fragments);
@@ -162,7 +166,7 @@ impl Workspace {
             fragment_tokens,
             fragment_paths,
             global_fragment_names,
-            module_fragment_names,
+            plugin_fragment_names,
             vars: cfg.vars.clone(),
             env: cfg.env.clone(),
             allowed_commands: cfg.allowed_commands.clone(),
@@ -261,7 +265,7 @@ fn discover_skills(src_dir: &Path, out_dir: &Path) -> Result<Vec<Skill>> {
 
         skills.push(Skill {
             name: dir_name.clone(),
-            module: String::new(), // stamped by caller after discovery
+            plugin: String::new(), // stamped by caller after discovery
             source_path,
             src_dir: skill_dir,
             target_dir: out_dir.join(&dir_name),
@@ -274,7 +278,7 @@ fn discover_skills(src_dir: &Path, out_dir: &Path) -> Result<Vec<Skill>> {
     Ok(skills)
 }
 
-fn discover_agents(source_dir: &Path, out_dir: &Path) -> Result<Vec<Agent>> {
+fn discover_agents(source_dir: &Path, out_dir: &Path, plugin: &str) -> Result<Vec<Agent>> {
     if !source_dir.exists() {
         return Ok(Vec::new());
     }
@@ -286,20 +290,20 @@ fn discover_agents(source_dir: &Path, out_dir: &Path) -> Result<Vec<Agent>> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let path = e.into_path();
-            let ext = path.extension()?.to_str()?;
-            if !path.is_file() || (ext != "pan" && ext != "md") {
+            if !path.is_file() {
                 return None;
             }
-            let filename = path.file_stem()?.to_str()?;
-            if filename.starts_with('_') || filename.starts_with('.') {
+            let file_name = path.file_name()?.to_str()?;
+            let name = file_name.strip_suffix(crate::agent::SOURCE_SUFFIX)?;
+            if name.starts_with('_') || name.starts_with('.') {
                 return None;
             }
 
-            let target_dir = out_dir.join(PathBuf::from("agents"));
             Some(Agent {
-                name: filename.to_string(),
+                name: name.to_string(),
+                plugin: plugin.to_string(),
                 source_path: path.clone(),
-                target_path: target_dir.join(format!("{}.md", filename)),
+                out_dir: out_dir.to_path_buf(),
             })
         })
         .collect();
@@ -495,7 +499,7 @@ mod tests {
         assert_eq!(ws.skills.len(), 1);
         let skill = ws.skills.get("diagnose").expect("skill 'diagnose'");
         assert_eq!(skill.name, "diagnose");
-        assert_eq!(skill.module, "default");
+        assert_eq!(skill.plugin, "default");
         assert_eq!(skill.scripts.len(), 1);
         assert_eq!(skill.scripts[0].relative_path, "scripts/check.sh");
         assert_eq!(skill.references.len(), 1);
@@ -508,29 +512,69 @@ mod tests {
     }
 
     #[test]
-    fn resolve_finds_agents() {
+    fn resolve_finds_agents_in_plugin_agents_dir() {
+        // Arrange
         let tmp = TempDir::new().unwrap();
-        let cfg = SkilletConfig::default();
+        let mut cfg = SkilletConfig::default();
+        if let Some(p) = cfg.plugins.get_mut("default") {
+            p.agents_dir = Some("src/agents".to_string());
+        }
 
-        let agents_dir = tmp.path().join("agents");
+        let agents_dir = tmp.path().join("src/agents");
         fs::create_dir_all(&agents_dir).unwrap();
         fs::write(
-            agents_dir.join("reviewer.pan"),
+            agents_dir.join("reviewer.agent.pan"),
             "---\nname: reviewer\n---\n",
         )
         .unwrap();
+        fs::write(agents_dir.join("notes.pan"), "not an agent").unwrap();
+        fs::write(agents_dir.join("_draft.agent.pan"), "").unwrap();
 
-        // Also create the skills src dir so resolution doesn't fail
-        fs::create_dir_all(tmp.path().join("src/skills")).unwrap();
-
+        // Act
         let ws = Workspace::resolve(tmp.path(), &cfg).unwrap();
 
-        assert!(ws.skills.is_empty());
+        // Assert
         assert_eq!(ws.agents.len(), 1);
-        assert_eq!(
-            ws.agents.get("reviewer").expect("agent 'reviewer'").name,
-            "reviewer"
-        );
+        let agent = ws.agents.get("reviewer").expect("agent 'reviewer'");
+        assert_eq!(agent.plugin, "default");
+        assert_eq!(agent.out_dir, tmp.path().join("skills"));
+    }
+
+    #[test]
+    fn resolve_ignores_workspace_level_agents_dir() {
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        fs::create_dir_all(&agents_dir).unwrap();
+        fs::write(agents_dir.join("reviewer.agent.pan"), "").unwrap();
+
+        let ws = Workspace::resolve(tmp.path(), &SkilletConfig::default()).unwrap();
+
+        assert!(ws.agents.is_empty());
+    }
+
+    #[test]
+    fn resolve_errors_on_agent_name_in_two_plugins() {
+        // Arrange
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = SkilletConfig::default();
+        let template = cfg.plugins.remove("default").unwrap();
+        for name in ["a", "b"] {
+            let mut p = template.clone();
+            p.src_dir = format!("{name}/skills");
+            p.out_dir = format!("{name}/out");
+            p.agents_dir = Some(format!("{name}/agents"));
+            cfg.plugins.insert(name.to_string(), p);
+        }
+        for dir in ["a/agents", "b/agents"] {
+            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+            fs::write(tmp.path().join(dir).join("reviewer.agent.pan"), "").unwrap();
+        }
+
+        // Act
+        let err = Workspace::resolve(tmp.path(), &cfg).unwrap_err();
+
+        // Assert
+        assert!(err.to_string().contains("must be unique"), "{err}");
     }
 
     #[test]
@@ -624,13 +668,13 @@ mod tests {
     }
 
     #[test]
-    fn global_fragments_tracked_separately_from_module_local() {
+    fn global_fragments_tracked_separately_from_plugin_local() {
         let tmp = TempDir::new().unwrap();
 
-        // Config with a global fragment dir and a module with its own
+        // Config with a global fragment dir and a plugin with its own
         let mut cfg = SkilletConfig::default();
         cfg.workspace.fragments_dir = Some("global-frags".to_string());
-        if let Some(m) = cfg.modules.get_mut("default") {
+        if let Some(m) = cfg.plugins.get_mut("default") {
             m.fragments_dir = Some("local-frags".to_string());
         }
 
@@ -645,7 +689,7 @@ mod tests {
 
         assert!(ws.global_fragment_names.contains("shared"));
         assert!(!ws.global_fragment_names.contains("private"));
-        let local = ws.module_fragment_names.get("default").unwrap();
+        let local = ws.plugin_fragment_names.get("default").unwrap();
         assert!(local.contains("private"));
         assert!(!local.contains("shared"));
         assert_eq!(ws.raw_fragments.len(), 2);

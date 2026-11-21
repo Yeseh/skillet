@@ -1,9 +1,6 @@
 allowed_commands = ["docker", "kubectl", "git"]
 
 [workspace]
-src_dir = "src/skills"
-out_dir = "skills"
-fragments_dir = "src/skills/_fragments"
 
 [lint]
 max_activation_tokens = 4000
@@ -22,3 +19,9 @@ project_name = "acme-app"
 [env]
 DEPLOY_ENV = { default = "staging" }
 CI = { default = "false" }
+
+[plugin.variables]
+src_dir = "src/skills"
+out_dir = "skills"
+fragments_dir = "src/skills/_fragments"
+version = "0.1.0"

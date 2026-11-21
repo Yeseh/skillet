@@ -61,6 +61,23 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Run the CI Checks Before Finishing
+
+**Before you report a task as done, run the same checks as CI (`.github/workflows/ci.yml`) and make them pass.**
+
+```sh
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
+cargo build --locked
+cargo test --locked
+```
+
+- CI treats every clippy warning as an error. A warning is a failure, not a note.
+- Do not dismiss a failing check as "pre-existing". Fix it, or stop and report it to the human as a blocker for CI.
+- If `cargo fmt --check` reports files you did not change, do not reformat or revert them. Report them.
+- When you change this list, change `ci.yml` too, and the other way around.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

@@ -1,6 +1,7 @@
 //! Token-budget computation for the `skillet budget` command.
 //!
-//! This module owns the domain logic for computing per-skill token budgets:
+//! This module owns the domain logic for computing per-skill and per-agent
+//! token budgets:
 //! discovery / activation / transitive token counts and per-fragment
 //! breakdowns. It prefers the recorded values in `skillet.lock` and falls
 //! back to hashing/counting on-disk artefacts when the lockfile is incomplete.
@@ -9,10 +10,10 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::frontmatter::parse_frontmatter;
-use crate::lockfile::Lockfile;
+use crate::lockfile::{ArtefactEntry, Lockfile};
 use crate::tokens::count_tokens;
 use crate::workspace::skill::Reference;
-use crate::workspace::{Skill, Workspace};
+use crate::workspace::{Agent, Skill, Workspace};
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -25,16 +26,17 @@ pub struct FragmentEntry {
     pub tokens: u32,
 }
 
-/// Token budget row for a single skill.
+/// Token budget row for a single skill or agent.
 #[derive(Debug, Clone, Serialize)]
 pub struct BudgetRow {
-    /// Skill name.
-    pub skill: String,
+    /// Skill or agent name.
+    pub name: String,
     /// Discovery (frontmatter name + description) tokens.
     pub discovery: u32,
     /// Activation (compiled SKILL.md minus fragments) tokens.
     pub activation: u32,
-    /// Transitive (compiled + referenced files) tokens.
+    /// Transitive (compiled + referenced files) tokens. Equal to the full
+    /// compiled size for agents, which have no referenced files.
     pub transitive: u32,
     /// Per-fragment token breakdown.
     pub fragments: Vec<FragmentEntry>,
@@ -43,11 +45,11 @@ pub struct BudgetRow {
 /// Workspace-level token totals.
 #[derive(Debug, Clone, Serialize)]
 pub struct BudgetTotals {
-    /// Sum of discovery tokens across all skills.
+    /// Sum of discovery tokens across all skills and agents.
     pub discovery: u32,
-    /// Sum of activation tokens across all skills.
+    /// Sum of activation tokens across all skills and agents.
     pub activation: u32,
-    /// Sum of transitive tokens across all skills.
+    /// Sum of transitive tokens across all skills and agents.
     pub transitive: u32,
 }
 
@@ -56,6 +58,8 @@ pub struct BudgetTotals {
 pub struct BudgetReport {
     /// Per-skill rows.
     pub skills: Vec<BudgetRow>,
+    /// Per-agent rows.
+    pub agents: Vec<BudgetRow>,
     /// Workspace-level totals.
     pub totals: BudgetTotals,
 }
@@ -100,6 +104,122 @@ pub fn transitive_tokens(compiled_tokens: u32, references: &[Reference], tokeniz
     compiled_tokens + references_tokens
 }
 
+/// Computes budget rows for the given agents (all if `agent_name` is `None`).
+pub fn compute_agent_rows(
+    ws: &Workspace,
+    lockfile: &Lockfile,
+    agent_name: Option<&str>,
+    tokenizer: &str,
+) -> Result<Vec<BudgetRow>> {
+    ws.agents
+        .values()
+        .filter(|a| agent_name.is_none_or(|n| a.name == n))
+        .map(|agent| match lockfile.agents.get(&agent.name) {
+            Some(entry) if entry.activation_tokens > 0 => {
+                Ok(row_from_entry(&agent.name, entry, lockfile))
+            }
+            _ => compute_agent_row_from_disk(agent, ws, lockfile, tokenizer),
+        })
+        .collect()
+}
+
+/// Builds a row from recorded lockfile values. Activation excludes the tokens
+/// of the fragments the artefact uses; they are listed separately.
+fn row_from_entry(name: &str, entry: &ArtefactEntry, lockfile: &Lockfile) -> BudgetRow {
+    let fragments: Vec<FragmentEntry> = entry
+        .fragments_used
+        .iter()
+        .map(|frag_name| FragmentEntry {
+            name: frag_name.clone(),
+            tokens: lockfile
+                .fragments
+                .get(frag_name)
+                .map(|f| f.tokens)
+                .unwrap_or(0),
+        })
+        .collect();
+    let frag_tokens_total: u32 = fragments.iter().map(|f| f.tokens).sum();
+
+    BudgetRow {
+        name: name.to_string(),
+        discovery: entry.discovery_tokens,
+        activation: entry.activation_tokens.saturating_sub(frag_tokens_total),
+        transitive: entry.transitive_tokens,
+        fragments,
+    }
+}
+
+fn compute_agent_row_from_disk(
+    agent: &Agent,
+    ws: &Workspace,
+    lockfile: &Lockfile,
+    tokenizer: &str,
+) -> Result<BudgetRow> {
+    let path = agent
+        .out_dir
+        .join(crate::agent::canonical_path(&agent.name));
+    let compiled = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "agent '{}' not found at {} — run `skillet build` first",
+            agent.name,
+            path.display()
+        )
+    })?;
+
+    let frag_names = lockfile
+        .agents
+        .get(&agent.name)
+        .map(|e| e.fragments_used.as_slice())
+        .unwrap_or(&[]);
+
+    Ok(row_from_compiled(
+        &agent.name,
+        &compiled,
+        &[],
+        frag_names,
+        ws,
+        tokenizer,
+    ))
+}
+
+/// Builds a row by counting tokens in compiled text. `references` are the files
+/// the artefact makes the agent read (skill references; none for agents).
+fn row_from_compiled(
+    name: &str,
+    compiled: &str,
+    references: &[Reference],
+    frag_names: &[String],
+    ws: &Workspace,
+    tokenizer: &str,
+) -> BudgetRow {
+    let discovery_text = match parse_frontmatter(compiled) {
+        Ok(Some(fm)) => format!(
+            "{} {}",
+            fm.name.unwrap_or_default(),
+            fm.description.unwrap_or_default()
+        ),
+        _ => String::new(),
+    };
+    let compiled_tokens = count_tokens(compiled, tokenizer);
+
+    let fragments: Vec<FragmentEntry> = frag_names
+        .iter()
+        .map(|frag_name| FragmentEntry {
+            name: frag_name.clone(),
+            tokens: ws.fragment_tokens.get(frag_name).copied().unwrap_or(0),
+        })
+        .collect();
+    let frag_tokens_total: u32 = fragments.iter().map(|f| f.tokens).sum();
+
+    BudgetRow {
+        name: name.to_string(),
+        discovery: count_tokens(&discovery_text, tokenizer),
+        activation: compiled_tokens.saturating_sub(frag_tokens_total),
+        transitive: transitive_tokens(compiled_tokens, references, tokenizer),
+        fragments,
+    }
+}
+
 // ── Per-skill computation ─────────────────────────────────────────────────────
 
 fn compute_row(
@@ -110,27 +230,7 @@ fn compute_row(
 ) -> Result<BudgetRow> {
     if let Some(entry) = lockfile.skills.get(&skill.name) {
         if entry.activation_tokens > 0 {
-            let mut fragments = Vec::with_capacity(entry.fragments_used.len());
-            let mut frag_tokens_total: u32 = 0;
-            for frag_name in &entry.fragments_used {
-                let tokens = lockfile
-                    .fragments
-                    .get(frag_name)
-                    .map(|f| f.tokens)
-                    .unwrap_or(0);
-                frag_tokens_total += tokens;
-                fragments.push(FragmentEntry {
-                    name: frag_name.clone(),
-                    tokens,
-                });
-            }
-            return Ok(BudgetRow {
-                skill: skill.name.clone(),
-                discovery: entry.discovery_tokens,
-                activation: entry.activation_tokens.saturating_sub(frag_tokens_total),
-                transitive: entry.transitive_tokens,
-                fragments,
-            });
+            return Ok(row_from_entry(&skill.name, entry, lockfile));
         }
     }
 
@@ -151,42 +251,18 @@ fn compute_row_from_disk(
         )
     })?;
 
-    let discovery_text = match parse_frontmatter(&compiled) {
-        Ok(Some(fm)) => format!(
-            "{} {}",
-            fm.name.unwrap_or_default(),
-            fm.description.unwrap_or_default()
-        ),
-        _ => String::new(),
-    };
-    let discovery = count_tokens(&discovery_text, tokenizer);
-    let compiled_tokens = count_tokens(&compiled, tokenizer);
-    let transitive = transitive_tokens(compiled_tokens, &skill.references, tokenizer);
-
     let frag_names = lockfile
         .skills
         .get(&skill.name)
         .map(|e| e.fragments_used.as_slice())
         .unwrap_or(&[]);
 
-    let mut fragments = Vec::with_capacity(frag_names.len());
-    let mut frag_tokens_total: u32 = 0;
-    for frag_name in frag_names {
-        let tokens = ws.fragment_tokens.get(frag_name).copied().unwrap_or(0);
-        frag_tokens_total += tokens;
-        fragments.push(FragmentEntry {
-            name: frag_name.clone(),
-            tokens,
-        });
-    }
-
-    let activation = compiled_tokens.saturating_sub(frag_tokens_total);
-
-    Ok(BudgetRow {
-        skill: skill.name.clone(),
-        discovery,
-        activation,
-        transitive,
-        fragments,
-    })
+    Ok(row_from_compiled(
+        &skill.name,
+        &compiled,
+        &skill.references,
+        frag_names,
+        ws,
+        tokenizer,
+    ))
 }

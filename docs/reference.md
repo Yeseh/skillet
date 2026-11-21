@@ -173,30 +173,30 @@ During build:
 
 ## Configuration
 
-`skillet.toml` controls workspace settings, per-module source/output paths, lint thresholds, tokenizer settings, and declared vars/env values.
+`skillet.toml` controls workspace settings, per-plugin source/output paths, lint thresholds, tokenizer settings, and declared vars/env values.
 
 ### `[workspace]`
 
-Workspace-wide settings. Source and output directories are declared per-module in `[module.*]`, not here.
+Workspace-wide settings. Source and output directories are declared per-plugin in `[plugin.*]`, not here.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `fragments_dir` | string | `"src/skills/_fragments"` | Directory holding workspace-global fragment `.fragment.pan` files, shared across all modules. |
+| `fragments_dir` | string | `"src/skills/_fragments"` | Directory holding workspace-global fragment `.fragment.pan` files, shared across all plugins. |
 
 `[workspace.publish]` configures plugin-marketplace output, with keys `agents`, `marketplace_name`, `owner_name`, and optional `owner_email`.
 
-### `[module.<name>]`
+### `[plugin.<name>]`
 
-Each module declares one source/output pair. `skillet init` writes a single `default` module; add more only when a project ships more than one source/output tree.
+Each plugin declares one source/output pair. `skillet init` writes a single `default` plugin; add more only when a project ships more than one source/output tree.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `src_dir` | string | `"src/skills"` | Directory holding this module's `.pan` sources, relative to the project root. |
-| `out_dir` | string | `"skills"` | Directory where this module's compiled `SKILL.md` outputs are written. |
-| `version` | string | — | Published version of the module (required). |
-| `fragments_dir` | string | _(none)_ | Module-local fragment directory; overrides workspace fragments of the same name. |
-| `description` | string | _(none)_ | Description written into `plugin.json` when the module is published. |
-| `publish` | boolean | `false` | Whether this module is included in the published marketplace. |
+| `src_dir` | string | `"src/skills"` | Directory holding this plugin's `.pan` sources, relative to the project root. |
+| `out_dir` | string | `"skills"` | Directory where this plugin's compiled `SKILL.md` outputs are written. |
+| `version` | string | — | Published version of the plugin (required). |
+| `fragments_dir` | string | _(none)_ | Plugin-local fragment directory; overrides workspace fragments of the same name. |
+| `description` | string | _(none)_ | Description written into `plugin.json` when the plugin is published. |
+| `publish` | boolean | `false` | Whether this plugin is included in the published marketplace. |
 
 ### `[lint]`
 
@@ -251,7 +251,7 @@ allowed_commands = ["docker", "kubectl"]
 [workspace]
 fragments_dir = "src/skills/_fragments"
 
-[module.default]
+[plugin.default]
 src_dir = "src/skills"
 out_dir = "skills"
 version = "0.1.0"

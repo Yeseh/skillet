@@ -43,6 +43,11 @@ fn all_example_workspaces_build_successfully() {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("built "),
+            "example '{}' built nothing — is its skillet.toml current?",
+            name
+        );
     }
 }
 

@@ -282,7 +282,7 @@ fn budget_json_row(tmp: &TempDir, skill: &str) -> serde_json::Value {
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["skill"] == skill)
+        .find(|r| r["name"] == skill)
         .cloned()
         .unwrap_or_else(|| panic!("no budget row for {skill}"))
 }
