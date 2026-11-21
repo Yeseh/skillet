@@ -3,6 +3,7 @@ mod build;
 mod check;
 mod init;
 mod lint;
+mod lsp;
 mod new;
 mod publish;
 mod skill;
@@ -141,6 +142,8 @@ enum Commands {
         #[arg(long)]
         format: Option<FormatArg>,
     },
+    /// Start a Language Server Protocol server over stdio
+    Lsp,
 }
 
 fn main() -> Result<()> {
@@ -255,6 +258,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
+        Commands::Lsp => lsp::run()?,
     }
     Ok(())
 }
