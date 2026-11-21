@@ -3,6 +3,7 @@
 //! This crate provides the core logic for the `skillet` CLI tool.
 
 pub mod agent;
+pub mod apm;
 pub mod budget;
 pub mod compiler;
 pub mod config;
