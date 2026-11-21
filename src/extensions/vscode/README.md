@@ -6,8 +6,8 @@ Syntax highlighting, linting diagnostics, and visual ref badges for `.pan` skill
 
 - **Syntax highlighting** — `.pan` files receive markdown syntax highlighting with:
   - YAML frontmatter styled as YAML
-  - Block includes (`{{> fragment-name}}`) highlighted distinctively
-  - Typed ref prefixes (`ref::`, `cmd::`, `skill::`, `var::`, `env::`) recognised as tokens
+  - Block includes (`{> fragment-name <}`) highlighted distinctively
+  - Typed ref prefixes (`ref::`, `cmd::`, `skill::`, `var::`, `env::`, `agent::`, `path::`, `url::`) recognised as tokens
 - **Linting** — on file save, runs `skillet lint --format json` and shows diagnostics in the Problems panel
 - **Go-to-definition** — Ctrl/Cmd-click (or F12) jumps to the target of `` `skill::` ``, `` `agent::` ``, and `` `ref::` `` refs, and `{> fragment <}` includes
 - **Ref badge decorations** — all typed ref backtick spans are styled with a rounded pill badge

@@ -17,8 +17,7 @@ interface LintDiagnostic {
 // ── Module-level state ────────────────────────────────────────────────────────
 
 let outputChannel: vscode.OutputChannel;
-const diagnosticsCollection =
-  vscode.languages.createDiagnosticCollection("skillet");
+let diagnosticsCollection: vscode.DiagnosticCollection;
 
 /** Whether we've already shown the "skillet not found" warning this session. */
 let cliMissingWarned = false;
@@ -475,6 +474,8 @@ function onDidSaveTextDocument(document: vscode.TextDocument): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("Skillet");
+  diagnosticsCollection =
+    vscode.languages.createDiagnosticCollection("skillet");
   const refDecoration = createRefDecorationType();
 
   // Decorate currently open .pan editors on activation
