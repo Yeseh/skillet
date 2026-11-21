@@ -17,8 +17,7 @@ interface LintDiagnostic {
 // ── Module-level state ────────────────────────────────────────────────────────
 
 let outputChannel: vscode.OutputChannel;
-const diagnosticsCollection =
-  vscode.languages.createDiagnosticCollection("skillet");
+let diagnosticsCollection: vscode.DiagnosticCollection;
 
 /** Whether we've already shown the "skillet not found" warning this session. */
 let cliMissingWarned = false;
@@ -31,18 +30,24 @@ const inFlightProcesses = new Map<string, cp.ChildProcess>();
 
 // ── Typed-ref decoration ──────────────────────────────────────────────────────
 
-const REF_DECORATION = vscode.window.createTextEditorDecorationType({
-  backgroundColor: new vscode.ThemeColor("badge.background"),
-  color: new vscode.ThemeColor("badge.foreground"),
-  borderRadius: "3px",
-  // Small padding improves pill shape readability
-  before: { margin: "0 1px" },
-  after: { margin: "0 1px" },
-});
+function createRefDecorationType(): vscode.TextEditorDecorationType {
+  return vscode.window.createTextEditorDecorationType({
+    backgroundColor: new vscode.ThemeColor("badge.background"),
+    color: new vscode.ThemeColor("badge.foreground"),
+    borderRadius: "3px",
+    // Small padding improves pill shape readability
+    before: { margin: "0 1px" },
+    after: { margin: "0 1px" },
+  });
+}
 
-const TYPED_REF_RE = /((?<!`)`(?!`))(ref|cmd|skill|var|env|agent)(::)([^`]*?)((?<!`)`(?!`))/g;
+const TYPED_REF_RE =
+  /((?<!`)`(?!`))(ref|cmd|skill|var|env|agent|path|url)(::)([^`]*?)((?<!`)`(?!`))/g;
 
-function applyRefDecorations(editor: vscode.TextEditor): void {
+function applyRefDecorations(
+  editor: vscode.TextEditor,
+  decorationType: vscode.TextEditorDecorationType
+): void {
   const ranges: vscode.Range[] = [];
   const text = editor.document.getText();
   let match: RegExpExecArray | null;
@@ -52,7 +57,7 @@ function applyRefDecorations(editor: vscode.TextEditor): void {
     const end = editor.document.positionAt(match.index + match[0].length);
     ranges.push(new vscode.Range(start, end));
   }
-  editor.setDecorations(REF_DECORATION, ranges);
+  editor.setDecorations(decorationType, ranges);
 }
 
 // ── Workspace root detection ──────────────────────────────────────────────────
@@ -469,33 +474,47 @@ function onDidSaveTextDocument(document: vscode.TextDocument): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("Skillet");
+  diagnosticsCollection =
+    vscode.languages.createDiagnosticCollection("skillet");
+  const refDecoration = createRefDecorationType();
 
   // Decorate currently open .pan editors on activation
   for (const editor of vscode.window.visibleTextEditors) {
     if (editor.document.languageId === "pan") {
-      applyRefDecorations(editor);
+      applyRefDecorations(editor, refDecoration);
     }
   }
+
+  // Decorate all visible .pan editors when the visible editor set changes (e.g. split views)
+  context.subscriptions.push(
+    vscode.window.onDidChangeVisibleTextEditors((editors) => {
+      for (const editor of editors) {
+        if (editor.document.languageId === "pan") {
+          applyRefDecorations(editor, refDecoration);
+        }
+      }
+    })
+  );
 
   // Decorate on editor switch
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && editor.document.languageId === "pan") {
-        applyRefDecorations(editor);
+        applyRefDecorations(editor, refDecoration);
       }
     })
   );
 
-  // Re-decorate on document change (typing)
+  // Re-decorate on document change (typing) across all visible editors showing it
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
-      const editor = vscode.window.activeTextEditor;
-      if (
-        editor &&
-        editor.document === event.document &&
-        event.document.languageId === "pan"
-      ) {
-        applyRefDecorations(editor);
+      if (event.document.languageId !== "pan") {
+        return;
+      }
+      for (const editor of vscode.window.visibleTextEditors) {
+        if (editor.document === event.document) {
+          applyRefDecorations(editor, refDecoration);
+        }
       }
     })
   );
@@ -536,7 +555,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(diagnosticsCollection);
   context.subscriptions.push(outputChannel);
-  context.subscriptions.push(REF_DECORATION);
+  context.subscriptions.push(refDecoration);
 }
 
 export function deactivate(): void {

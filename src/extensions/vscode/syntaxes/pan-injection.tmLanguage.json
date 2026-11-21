@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "pan.injection",
+  "injectionSelector": "L:text.html.pan -comment -markup.fenced_code -markup.inline.raw -meta.embedded.block.yaml",
+  "patterns": [
+    { "include": "#typed-ref" }
+  ],
+  "repository": {
+    "typed-ref": {
+      "comment": "Typed ref in backticks: `ref::path`, `cmd::git`, `skill::name`, `var::x`, `env::VAR`, `agent::name`, `path::dir`, `url::https://...`",
+      "match": "((?<!`)`(?!`))(ref|cmd|skill|var|env|agent|path|url)(::)([^`]*?)((?<!`)`(?!`))",
+      "captures": {
+        "1": { "name": "punctuation.definition.ref.begin.pan" },
+        "2": { "name": "support.type.ref-kind.pan" },
+        "3": { "name": "punctuation.separator.ref.pan" },
+        "4": { "name": "string.other.ref-target.pan" },
+        "5": { "name": "punctuation.definition.ref.end.pan" }
+      }
+    }
+  }
+}
