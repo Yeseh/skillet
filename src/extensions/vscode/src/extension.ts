@@ -2,6 +2,11 @@ import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import { LanguageClient, TransportKind } from "vscode-languageclient/node";
+import type {
+  LanguageClientOptions,
+  ServerOptions,
+} from "vscode-languageclient/node";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -27,6 +32,7 @@ interface LintDiagnostic {
 
 let outputChannel: vscode.OutputChannel;
 let diagnosticsCollection: vscode.DiagnosticCollection;
+let languageClient: LanguageClient | undefined;
 
 /** Whether we've already shown the "skillet not found" warning this session. */
 let cliMissingWarned = false;
@@ -91,7 +97,7 @@ function findWorkspaceRoot(filePath: string): string | undefined {
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
-function executablePath(workspaceRoot: string): string {
+function executablePath(workspaceRoot?: string): string {
   const cfg = vscode.workspace.getConfiguration("skillet");
   const raw = cfg.get<string>("executablePath", "skillet");
   if (path.isAbsolute(raw)) {
@@ -99,7 +105,7 @@ function executablePath(workspaceRoot: string): string {
   }
   // Relative path: resolve against workspace root
   if (raw !== "skillet" && raw !== "") {
-    return path.resolve(workspaceRoot, raw);
+    return workspaceRoot ? path.resolve(workspaceRoot, raw) : raw;
   }
   return raw;
 }
@@ -110,31 +116,25 @@ function isPedantic(): boolean {
     .get<boolean>("pedantic", false);
 }
 
-// ── Go-to-definition ────────────────────────────────────────────────────────
-
-/** Source/fragment directories extracted from `skillet.toml`. */
+/** Plugin source directories extracted from `skillet.toml`. */
 interface WorkspaceDirs {
   /** Plugin `src_dir` values (relative to workspace root). */
   srcDirs: string[];
-  /** Fragment directories (workspace-global + plugin-local), relative to root. */
-  fragmentDirs: string[];
 }
 
 /**
- * Minimal `skillet.toml` reader.  Extracts only the keys go-to-definition
- * needs: every plugin's `src_dir`, plus the workspace-global and plugin-local
- * `fragments_dir` values.  Handles the well-formed TOML that `skillet` emits;
- * not a general-purpose parser.
+ * Minimal `skillet.toml` reader. Extracts plugin `src_dir` values to map
+ * skill diagnostics to source files. Handles the well-formed TOML that
+ * `skillet` emits; it is not a general-purpose parser.
  */
 function parseWorkspaceDirs(root: string): WorkspaceDirs {
   const srcDirs: string[] = [];
-  const fragmentDirs: string[] = [];
 
   let raw: string;
   try {
     raw = fs.readFileSync(path.join(root, "skillet.toml"), "utf8");
   } catch {
-    return { srcDirs, fragmentDirs };
+    return { srcDirs };
   }
 
   let section = "";
@@ -157,155 +157,16 @@ function parseWorkspaceDirs(root: string): WorkspaceDirs {
     const isPlugin = section.startsWith("plugin.");
     if (key === "src_dir" && (isPlugin || section === "workspace")) {
       srcDirs.push(value);
-    } else if (
-      key === "fragments_dir" &&
-      (isPlugin || section === "workspace")
-    ) {
-      fragmentDirs.push(value);
     }
   }
 
-  return { srcDirs, fragmentDirs };
+  return { srcDirs };
 }
 
 /** Returns the first path in `candidates` that exists on disk, or undefined. */
 function firstExisting(candidates: string[]): string | undefined {
   return candidates.find((p) => fs.existsSync(p));
 }
-
-/**
- * Given the path of a `.pan` document, find its enclosing skill directory —
- * the directory directly under a plugin `src_dir` that contains the document.
- * Falls back to the document's own directory when it lives outside any
- * configured source dir.
- */
-function findSkillDir(
-  documentPath: string,
-  root: string,
-  srcDirs: string[]
-): string {
-  for (const srcDir of srcDirs) {
-    const abs = path.resolve(root, srcDir);
-    const rel = path.relative(abs, documentPath);
-    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-      const firstSegment = rel.split(path.sep)[0];
-      return path.join(abs, firstSegment);
-    }
-  }
-  return path.dirname(documentPath);
-}
-
-/** A typed ref or fragment reference located on a single line. */
-interface PanReference {
-  kind: "ref" | "skill" | "agent" | "fragment";
-  value: string;
-  range: vscode.Range;
-}
-
-// Typed refs whose targets are file-backed: `ref::`, `skill::`, `agent::`.
-const DEF_REF_RE = /(?<!`)`(?!`)(ref|skill|agent)::([^`]+?)`(?!`)/g;
-// Fragment includes: `{> name <}`.
-const DEF_FRAGMENT_RE = /\{>\s*([^<]+?)\s*<\}/g;
-
-/** Finds the file-backed ref or fragment whose span contains `position`. */
-function referenceAt(
-  document: vscode.TextDocument,
-  position: vscode.Position
-): PanReference | undefined {
-  const line = document.lineAt(position.line).text;
-  const character = position.character;
-
-  const scan = (
-    re: RegExp,
-    make: (m: RegExpExecArray) => Omit<PanReference, "range">
-  ): PanReference | undefined => {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(line)) !== null) {
-      const start = m.index;
-      const end = m.index + m[0].length;
-      if (character >= start && character <= end) {
-        const range = new vscode.Range(
-          position.line,
-          start,
-          position.line,
-          end
-        );
-        return { ...make(m), range };
-      }
-    }
-    return undefined;
-  };
-
-  return (
-    scan(DEF_REF_RE, (m) => ({
-      kind: m[1] as "ref" | "skill" | "agent",
-      value: m[2].trim(),
-    })) ??
-    scan(DEF_FRAGMENT_RE, (m) => ({
-      kind: "fragment",
-      value: m[1].trim(),
-    }))
-  );
-}
-
-/** Resolves a Pan reference to the absolute path of its definition file. */
-function resolveDefinition(
-  ref: PanReference,
-  documentPath: string,
-  root: string,
-  dirs: WorkspaceDirs
-): string | undefined {
-  switch (ref.kind) {
-    case "ref": {
-      const skillDir = findSkillDir(documentPath, root, dirs.srcDirs);
-      const target = path.resolve(skillDir, ref.value);
-      return fs.existsSync(target) ? target : undefined;
-    }
-    case "skill":
-      return firstExisting(
-        dirs.srcDirs.map((src) =>
-          path.join(root, src, ref.value, `${ref.value}.pan`)
-        )
-      );
-    case "agent":
-      return firstExisting(
-        ["pan", "md"].map((ext) =>
-          path.join(root, "agents", `${ref.value}.${ext}`)
-        )
-      );
-    case "fragment":
-      return firstExisting(
-        dirs.fragmentDirs.map((dir) =>
-          path.join(root, dir, `${ref.value}.fragment.pan`)
-        )
-      );
-  }
-}
-
-const panDefinitionProvider: vscode.DefinitionProvider = {
-  provideDefinition(document, position) {
-    const ref = referenceAt(document, position);
-    if (!ref) {
-      return undefined;
-    }
-    const root = findWorkspaceRoot(document.uri.fsPath);
-    if (!root) {
-      return undefined;
-    }
-    const dirs = parseWorkspaceDirs(root);
-    const target = resolveDefinition(ref, document.uri.fsPath, root, dirs);
-    if (!target) {
-      return undefined;
-    }
-    const link: vscode.LocationLink = {
-      originSelectionRange: ref.range,
-      targetUri: vscode.Uri.file(target),
-      targetRange: new vscode.Range(0, 0, 0, 0),
-    };
-    return [link];
-  },
-};
 
 // ── CLI invocation ────────────────────────────────────────────────────────────
 
@@ -493,6 +354,41 @@ function warnCliMissing(exe: string): void {
     });
 }
 
+function startLanguageClient(context: vscode.ExtensionContext): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const exe = executablePath(workspaceRoot);
+  const serverOptions: ServerOptions = {
+    command: exe,
+    args: ["lsp"],
+    transport: TransportKind.stdio,
+  };
+  const clientOptions: LanguageClientOptions = {
+    documentSelector: [{ scheme: "file", language: "pan" }],
+    outputChannel,
+  };
+
+  languageClient = new LanguageClient(
+    "skillet",
+    "Skillet Language Server",
+    serverOptions,
+    clientOptions
+  );
+  context.subscriptions.push(languageClient);
+
+  void languageClient
+    .start()
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        warnCliMissing(exe);
+        return;
+      }
+      outputChannel.appendLine(
+        `[error] Failed to start '${exe} lsp': ${error.message}`
+      );
+      outputChannel.show(true);
+    });
+}
+
 // ── Save handler with debounce ────────────────────────────────────────────────
 
 const DEBOUNCE_MS = 400;
@@ -527,6 +423,7 @@ export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("Skillet");
   diagnosticsCollection =
     vscode.languages.createDiagnosticCollection("skillet");
+  startLanguageClient(context);
   const refDecoration = createRefDecorationType();
 
   // Decorate currently open .pan editors on activation
@@ -570,11 +467,6 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Go-to-definition for skill, agent, and ref refs plus fragment includes
-  context.subscriptions.push(
-    vscode.languages.registerDefinitionProvider("pan", panDefinitionProvider)
-  );
-
   // Lint on save
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(onDidSaveTextDocument)
@@ -609,7 +501,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(refDecoration);
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   // Cancel all in-flight processes
   for (const proc of inFlightProcesses.values()) {
     proc.kill();
@@ -621,4 +513,5 @@ export function deactivate(): void {
     clearTimeout(timer);
   }
   debounceTimers.clear();
+  await languageClient?.stop();
 }
