@@ -22,8 +22,8 @@ pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
         );
     }
 
-    let module_name = derive_module_name(workspace);
-    let config_toml = generate_config_toml(&module_name);
+    let plugin_name = derive_plugin_name(workspace);
+    let config_toml = generate_config_toml(&plugin_name);
 
     let skills_src_dir = workspace.join("src/skills");
     let skills_out_dir = workspace.join("skills");
@@ -54,12 +54,12 @@ pub fn run(workspace: &Path, adopt: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Derives a kebab-case module name from the workspace directory name.
-fn derive_module_name(workspace: &Path) -> String {
+/// Derives a kebab-case plugin name from the workspace directory name.
+fn derive_plugin_name(workspace: &Path) -> String {
     let folder = workspace
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("my-module");
+        .unwrap_or("my-plugin");
     to_kebab_case(folder)
 }
 
@@ -79,19 +79,19 @@ fn to_kebab_case(s: &str) -> String {
     }
     let trimmed = result.trim_end_matches('-').to_string();
     if trimmed.is_empty() {
-        "my-module".to_string()
+        "my-plugin".to_string()
     } else {
         trimmed
     }
 }
 
-/// Generates the `skillet.toml` content for a new workspace with one named module.
-fn generate_config_toml(module_name: &str) -> String {
+/// Generates the `skillet.toml` content for a new workspace with one named plugin.
+fn generate_config_toml(plugin_name: &str) -> String {
     format!(
         r#"[workspace]
 
 [vars]
-project_name = "{module_name}"
+project_name = "{plugin_name}"
 
 [lint]
 max_activation_tokens = 4000
@@ -102,7 +102,7 @@ max_fragment_tokens = 500
 tokenizer = "cl100k_base"
 verify_urls = false
 
-[module.{module_name}]
+[plugin.{plugin_name}]
 src_dir = "src/skills"
 out_dir = "skills"
 version = "0.1.0"
@@ -256,9 +256,9 @@ mod tests {
     }
 
     #[test]
-    fn generate_config_toml_contains_module_name() {
+    fn generate_config_toml_contains_plugin_name() {
         let toml = generate_config_toml("my-skill-pack");
-        assert!(toml.contains("[module.my-skill-pack]"));
+        assert!(toml.contains("[plugin.my-skill-pack]"));
         assert!(toml.contains("project_name = \"my-skill-pack\""));
     }
 }

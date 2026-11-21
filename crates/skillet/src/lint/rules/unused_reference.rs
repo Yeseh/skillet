@@ -64,7 +64,7 @@ mod tests {
         let skill_names: Vec<&str> = vec![];
         CompiledSkill {
             name: name.to_string(),
-            module: "default".to_string(),
+            plugin: "default".to_string(),
             source_path: PathBuf::from(format!("src/skills/{name}/{name}.pan")),
             raw: raw.to_string(),
             check_diags: vec![],
@@ -94,7 +94,7 @@ mod tests {
             fragment_tokens: HashMap::new(),
             fragment_paths: HashMap::new(),
             global_fragment_names: Default::default(),
-            module_fragment_names: Default::default(),
+            plugin_fragment_names: Default::default(),
             vars: Default::default(),
             env: Default::default(),
             allowed_commands: Default::default(),
@@ -105,7 +105,7 @@ mod tests {
     fn make_skill(name: &str, references: Vec<Reference>) -> Skill {
         Skill {
             name: name.to_string(),
-            module: "default".to_string(),
+            plugin: "default".to_string(),
             source_path: PathBuf::from(format!("src/skills/{name}/{name}.pan")),
             src_dir: PathBuf::from(format!("src/skills/{name}")),
             target_dir: PathBuf::from(format!("dist/{name}")),

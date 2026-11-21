@@ -1,7 +1,7 @@
 //! Freshness verification CLI: compares workspace state against `skillet.lock`.
 //!
 //! `skillet check` is designed as a fast CI gate — it never recompiles; it
-//! just hashes source files and on-disk `SKILL.md` files and compares them
+//! just hashes source files and on-disk `SKILL.md` and agent files and compares them
 //! against the recorded hashes in the lockfile.
 //!
 //! The verdict computation lives in `skillet::freshness`; this module handles
@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use skillet::config::SkilletConfig;
-use skillet::freshness::{self, CheckReport, SkillResult};
+use skillet::freshness::{self, ArtefactResult, CheckReport};
 use skillet::lockfile;
 use skillet::workspace::Workspace;
 use std::path::Path;
@@ -24,10 +24,10 @@ pub enum OutputFormat {
     Json,
 }
 
-/// Runs freshness checks for all skills in the workspace.
+/// Runs freshness checks for all skills and agents in the workspace.
 pub fn run(
     workspace_path: &Path,
-    _module_name: Option<&str>,
+    _plugin_name: Option<&str>,
     format: OutputFormat,
     config: &SkilletConfig,
 ) -> Result<bool> {
@@ -53,26 +53,44 @@ pub fn run(
 }
 
 fn render(report: &CheckReport) {
-    let stale: Vec<&SkillResult> = report.skills.iter().filter(|r| !r.fresh).collect();
+    let stale_skills: Vec<&ArtefactResult> = report.skills.iter().filter(|r| !r.fresh).collect();
+    let stale_agents: Vec<&ArtefactResult> = report.agents.iter().filter(|r| !r.fresh).collect();
 
-    if stale.is_empty() {
-        let n = report.skills.len();
+    if stale_skills.is_empty() && stale_agents.is_empty() {
         println!(
-            "✓ all {} skill{} up-to-date",
-            n,
-            if n == 1 { " is" } else { "s are" }
+            "✓ all {} up-to-date",
+            counted(report.skills.len(), report.agents.len())
         );
         return;
     }
 
-    for skill in &stale {
+    for skill in &stale_skills {
         for reason in &skill.reasons {
             println!("✗ {}: {}", skill.name, reason);
         }
     }
+    for agent in &stale_agents {
+        for reason in &agent.reasons {
+            println!("✗ agent {}: {}", agent.name, reason);
+        }
+    }
     println!(
-        "\n{} skill{} stale",
-        stale.len(),
-        if stale.len() == 1 { " is" } else { "s are" }
+        "\n{} stale",
+        counted(stale_skills.len(), stale_agents.len())
     );
+}
+
+/// Formats a count of skills and agents, e.g. "2 skills and 1 agent".
+/// The agent part is left out when there are no agents.
+fn counted(skills: usize, agents: usize) -> String {
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    if agents == 0 {
+        plural(skills, "skill")
+    } else {
+        format!(
+            "{} and {}",
+            plural(skills, "skill"),
+            plural(agents, "agent")
+        )
+    }
 }

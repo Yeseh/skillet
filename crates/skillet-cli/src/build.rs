@@ -8,11 +8,12 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use owo_colors::OwoColorize;
 use serde::Serialize;
+use skillet::agent::AgentDefinition;
 use skillet::compiler::check::{check_source_file, CheckDiag, Severity};
 use skillet::compiler::PanSource;
 use skillet::config::SkilletConfig;
 use skillet::lockfile::{self, ArtefactEntry, ArtefactRefs, LockMeta, Lockfile};
-use skillet::workspace::{hash_bytes, hash_file, Skill, Workspace};
+use skillet::workspace::{hash_bytes, hash_file, Agent, Skill, Workspace};
 use std::path::Path;
 
 // ── Build options ──────────────────────────────────────────────────────────────
@@ -50,48 +51,59 @@ impl BuildOptions {
 pub struct BuildReport {
     /// Names of skills that were built during this run.
     pub skills_built: Vec<String>,
+    /// Names of agents that were built during this run.
+    pub agents_built: Vec<String>,
     /// Warnings generated during the build (e.g. missing commands or broken URLs).
     pub warnings: Vec<String>,
     /// Path to the lockfile used during the build.
     pub lockfile_path: String,
 }
 
-/// Compiles `.pan` sources to `SKILL.md` files and updates `skillet.lock`.
+/// Compiles `.pan` sources to `SKILL.md` files and agent sources to agent
+/// definitions, then updates `skillet.lock`.
 pub fn run(
     workspace_path: &Path,
     skill_name: Option<&str>,
-    module_name: Option<&str>,
+    plugin_name: Option<&str>,
     opts: &BuildOptions,
     cfg: &SkilletConfig,
 ) -> Result<()> {
     let ws = Workspace::resolve(workspace_path, cfg)?;
+
+    if let Some(plugin_name) = plugin_name {
+        if !cfg.plugins.contains_key(plugin_name) {
+            bail!("plugin '{}' not found in skillet.toml", plugin_name);
+        }
+    }
 
     let targets: Vec<&Skill> = match skill_name {
         Some(name) => match ws.skills.get(name) {
             Some(s) => vec![s],
             None => bail!("skill '{}' not found in workspace", name),
         },
-        None => {
-            if let Some(mod_name) = module_name {
-                let skills: Vec<&Skill> = ws
-                    .skills
-                    .values()
-                    .filter(|s| s.module == mod_name)
-                    .collect();
-                if skills.is_empty() {
-                    bail!("module '{}' not found or has no skills", mod_name);
-                }
-                skills
-            } else {
-                ws.skills.values().collect()
-            }
-        }
+        None => ws
+            .skills
+            .values()
+            .filter(|s| plugin_name.is_none_or(|p| s.plugin == p))
+            .collect(),
     };
 
-    if targets.is_empty() {
+    // A single-skill build does not build agents.
+    let mut agent_targets: Vec<&Agent> = match skill_name {
+        Some(_) => vec![],
+        None => ws
+            .agents
+            .values()
+            .filter(|a| plugin_name.is_none_or(|p| a.plugin == p))
+            .collect(),
+    };
+    agent_targets.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if targets.is_empty() && agent_targets.is_empty() {
         if opts.format == OutputFormat::Json {
             let report = BuildReport {
                 skills_built: vec![],
+                agents_built: vec![],
                 warnings: vec![],
                 lockfile_path: workspace_path
                     .join("skillet.lock")
@@ -100,7 +112,7 @@ pub fn run(
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
-            eprintln!("no skills found");
+            eprintln!("no skills or agents found");
         }
         return Ok(());
     }
@@ -110,16 +122,16 @@ pub fn run(
         let mut seen: std::collections::HashMap<&std::path::Path, (&str, &str)> =
             std::collections::HashMap::new();
         for skill in &targets {
-            if let Some((other_module, other_skill)) =
-                seen.insert(skill.target_dir.as_path(), (&skill.module, &skill.name))
+            if let Some((other_plugin, other_skill)) =
+                seen.insert(skill.target_dir.as_path(), (&skill.plugin, &skill.name))
             {
                 bail!(
-                    "output collision: skill '{}' (module '{}') and skill '{}' (module '{}') \
+                    "output collision: skill '{}' (plugin '{}') and skill '{}' (plugin '{}') \
                      both write to {}",
                     skill.name,
-                    skill.module,
+                    skill.plugin,
                     other_skill,
-                    other_module,
+                    other_plugin,
                     skill.target_dir.display()
                 );
             }
@@ -144,6 +156,15 @@ pub fn run(
         skills_built.push(skill.name.clone());
     }
 
+    let mut agents_built: Vec<String> = Vec::new();
+    for agent in &agent_targets {
+        compile_one_agent(agent, &ws, &mut lockfile)?;
+        if opts.format != OutputFormat::Json {
+            println!("built agent {}", agent.name);
+        }
+        agents_built.push(agent.name.clone());
+    }
+
     rebuild_fragment_entries(&mut lockfile, &ws)?;
 
     let lock_path = workspace_path.join("skillet.lock");
@@ -161,6 +182,7 @@ pub fn run(
     if opts.format == OutputFormat::Json {
         let report = BuildReport {
             skills_built,
+            agents_built,
             warnings,
             lockfile_path: lock_path.to_string_lossy().to_string(),
         };
@@ -179,7 +201,7 @@ fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> 
     let diags = check_source_file(ws, &pan_source, &skill.references);
 
     for d in &diags {
-        eprintln!("{}", render_diag(skill, d));
+        eprintln!("{}", render_diag(&skill.name, &skill.source_path, d));
     }
 
     if diags.iter().any(|d| d.severity == Severity::Error) {
@@ -269,16 +291,77 @@ fn copy_skill_child_files(skill: &Skill) -> Result<()> {
     Ok(())
 }
 
-fn render_diag(skill: &Skill, d: &CheckDiag) -> String {
+/// Compiles one agent source, validates it as an agent definition, and writes
+/// the canonical file plus the GitHub Copilot copy.
+fn compile_one_agent(agent: &Agent, ws: &Workspace, lockfile: &mut Lockfile) -> Result<()> {
+    let source_content = std::fs::read_to_string(&agent.source_path)
+        .with_context(|| format!("failed to read {}", agent.source_path.display()))?;
+    let pan_source = PanSource::new(source_content);
+
+    // An agent has no `references/` directory, so every `ref::` is reported.
+    let diags = check_source_file(ws, &pan_source, &[]);
+    for d in &diags {
+        eprintln!("{}", render_diag(&agent.name, &agent.source_path, d));
+    }
+    if diags.iter().any(|d| d.severity == Severity::Error) {
+        bail!("check errors in agent '{}'", agent.name);
+    }
+
+    let output = skillet::compiler::compile::compile(ws, &pan_source, &[]);
+
+    let definition = AgentDefinition::parse(&output.text, &agent.name).map_err(|e| {
+        anyhow::anyhow!(
+            "[agent-{}] {} ({})",
+            e.code(),
+            e,
+            agent.source_path.display()
+        )
+    })?;
+
+    for rel in [
+        skillet::agent::canonical_path(definition.name.as_str()),
+        skillet::agent::copilot_path(definition.name.as_str()),
+    ] {
+        let path = agent.out_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::write(&path, &output.text)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+
+    let skill_names: Vec<&str> = ws.skills.keys().map(String::as_str).collect();
+    let parsed_refs = skillet::refs::ParsedRefs::extract(pan_source.as_str(), &skill_names);
+
+    lockfile.agents.insert(
+        agent.name.clone(),
+        ArtefactEntry {
+            source_hash: hash_file(&agent.source_path)?,
+            compiled_hash: hash_bytes(output.text.as_bytes()),
+            discovery_tokens: output.discovery_tokens,
+            activation_tokens: output.activation_tokens,
+            // An agent has no referenced files: its transitive cost is its activation cost.
+            transitive_tokens: output.activation_tokens,
+            fragments_used: output.fragments_used,
+            refs: ArtefactRefs::from_parsed(&parsed_refs),
+            minhash: vec![],
+        },
+    );
+
+    Ok(())
+}
+
+fn render_diag(name: &str, source_path: &Path, d: &CheckDiag) -> String {
     let level = match d.severity {
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
     format!(
         "[{level}] {} {} ({}:{}:{})",
-        skill.name,
+        name,
         d.message,
-        skill.source_path.display(),
+        source_path.display(),
         d.line,
         d.col
     )
@@ -287,7 +370,7 @@ fn render_diag(skill: &Skill, d: &CheckDiag) -> String {
 fn rebuild_fragment_entries(lockfile: &mut Lockfile, ws: &Workspace) -> Result<()> {
     lockfile.fragments.clear();
 
-    for (skill_name, entry) in &lockfile.skills {
+    for (skill_name, entry) in lockfile.skills.iter().chain(&lockfile.agents) {
         for frag_name in &entry.fragments_used {
             lockfile
                 .fragments

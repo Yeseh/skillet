@@ -1,23 +1,25 @@
 //! Freshness verification: compares workspace state against `skillet.lock`.
 //!
 //! This is the domain logic behind `skillet check` — a fast CI gate that never
-//! recompiles. It hashes source files, on-disk `SKILL.md` files, and fragments
+//! recompiles. It hashes source files, on-disk `SKILL.md` and agent files, and fragments
 //! and compares them against the hashes recorded in the lockfile, producing a
 //! [`CheckReport`] ready for rendering.
 
 use serde::Serialize;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-use crate::lockfile::Lockfile;
+use crate::lockfile::{ArtefactEntry, Lockfile};
 use crate::workspace::{self, Workspace};
 
-/// Freshness verdict for one skill.
+/// Freshness verdict for one skill or agent.
 #[derive(Debug, Serialize)]
-pub struct SkillResult {
-    /// Skill name.
+pub struct ArtefactResult {
+    /// Skill or agent name.
     pub name: String,
-    /// Whether the skill is up-to-date with the lockfile.
+    /// Whether the artefact is up-to-date with the lockfile.
     pub fresh: bool,
-    /// Human-readable reasons the skill is stale (empty when fresh).
+    /// Human-readable reasons the artefact is stale (empty when fresh).
     pub reasons: Vec<String>,
     /// Machine-readable staleness differences.
     pub diffs: Vec<DiffEntry>,
@@ -36,94 +38,72 @@ pub struct DiffEntry {
 /// Overall `check` output.
 #[derive(Debug, Serialize)]
 pub struct CheckReport {
-    /// Whether every skill in the workspace is fresh.
+    /// Whether every skill and agent in the workspace is fresh.
     pub fresh: bool,
     /// Per-skill verdicts, sorted by name.
-    pub skills: Vec<SkillResult>,
+    pub skills: Vec<ArtefactResult>,
+    /// Per-agent verdicts, sorted by name.
+    pub agents: Vec<ArtefactResult>,
+}
+
+/// One compiled output file of an artefact, with the diff kinds and label used
+/// when it is missing or changed.
+struct Output {
+    path: PathBuf,
+    label: String,
+    missing_kind: &'static str,
+    changed_kind: &'static str,
 }
 
 /// Computes the freshness report by hashing sources/outputs/fragments against
 /// the lockfile. The returned [`CheckReport`] is sorted and has `fresh`
 /// computed, ready to render.
 pub fn verify(ws: &Workspace, lockfile: &Lockfile) -> CheckReport {
-    let source_names: std::collections::HashSet<&str> =
-        ws.skills.values().map(|s| s.name.as_str()).collect();
-
-    let mut results: Vec<SkillResult> = ws
+    let mut skills: Vec<ArtefactResult> = ws
         .skills
         .values()
         .map(|skill| {
-            let mut reasons: Vec<String> = Vec::new();
-            let mut diffs: Vec<DiffEntry> = Vec::new();
+            let output = Output {
+                path: skill.target_dir.join("SKILL.md"),
+                label: "SKILL.md".to_string(),
+                missing_kind: "skill_md_missing",
+                changed_kind: "skill_md_changed",
+            };
+            verify_artefact(
+                "skill",
+                &skill.name,
+                &skill.source_path,
+                &[output],
+                lockfile.skills.get(&skill.name),
+            )
+        })
+        .collect();
 
-            match lockfile.skills.get(&skill.name) {
-                None => {
-                    reasons.push(format!(
-                        "skill '{}' not in lockfile — run `skillet build`",
-                        skill.name
-                    ));
-                    diffs.push(DiffEntry {
-                        kind: "not_in_lockfile".to_string(),
-                        file: None,
-                    });
-                }
-                Some(entry) => {
-                    match workspace::hash_file(&skill.source_path) {
-                        Err(e) => reasons.push(format!("could not hash source: {}", e)),
-                        Ok(current_source_hash) => {
-                            if current_source_hash != entry.source_hash {
-                                let fname = skill
-                                    .source_path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                reasons.push(format!(
-                                    "source '{}' has changed since last build",
-                                    fname
-                                ));
-                                diffs.push(DiffEntry {
-                                    kind: "source_changed".to_string(),
-                                    file: Some(skill.source_path.to_string_lossy().to_string()),
-                                });
-                            }
-                        }
-                    }
-
-                    let skill_md = skill.target_dir.join("SKILL.md");
-                    if !skill_md.exists() {
-                        reasons.push("SKILL.md is missing — run `skillet build`".to_string());
-                        diffs.push(DiffEntry {
-                            kind: "skill_md_missing".to_string(),
-                            file: Some(skill_md.to_string_lossy().to_string()),
-                        });
-                    } else {
-                        match workspace::hash_file(&skill_md) {
-                            Err(e) => reasons.push(format!("could not hash SKILL.md: {}", e)),
-                            Ok(current_compiled_hash) => {
-                                if current_compiled_hash != entry.compiled_hash {
-                                    reasons.push(
-                                        "SKILL.md does not match last build — run `skillet build`"
-                                            .to_string(),
-                                    );
-                                    diffs.push(DiffEntry {
-                                        kind: "skill_md_changed".to_string(),
-                                        file: Some(skill_md.to_string_lossy().to_string()),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let fresh = reasons.is_empty();
-            SkillResult {
-                name: skill.name.clone(),
-                fresh,
-                reasons,
-                diffs,
-            }
+    // Both agent copies are written from the same compiled text, so both are
+    // compared against the one recorded compiled hash.
+    let mut agents: Vec<ArtefactResult> = ws
+        .agents
+        .values()
+        .map(|agent| {
+            let outputs: Vec<Output> = [
+                crate::agent::canonical_path(&agent.name),
+                crate::agent::copilot_path(&agent.name),
+            ]
+            .into_iter()
+            .map(|rel| Output {
+                path: agent.out_dir.join(&rel),
+                label: rel,
+                missing_kind: "agent_output_missing",
+                changed_kind: "agent_output_changed",
+            })
+            .collect();
+            verify_artefact(
+                "agent",
+                &agent.name,
+                &agent.source_path,
+                &outputs,
+                lockfile.agents.get(&agent.name),
+            )
         })
         .collect();
 
@@ -157,8 +137,12 @@ pub fn verify(ws: &Workspace, lockfile: &Lockfile) -> CheckReport {
             },
         };
         if let (Some(r), Some(dk)) = (reason, diff_kind) {
-            for skill_name in &frag_entry.used_by {
-                if let Some(result) = results.iter_mut().find(|s| &s.name == skill_name) {
+            for user in &frag_entry.used_by {
+                for result in skills
+                    .iter_mut()
+                    .chain(agents.iter_mut())
+                    .filter(|r| &r.name == user)
+                {
                     result.fresh = false;
                     result.reasons.push(r.clone());
                     result.diffs.push(DiffEntry {
@@ -170,30 +154,127 @@ pub fn verify(ws: &Workspace, lockfile: &Lockfile) -> CheckReport {
         }
     }
 
-    // Flag lockfile entries whose source directory no longer exists.
+    // Flag lockfile entries whose source no longer exists.
+    let skill_names: HashSet<&str> = ws.skills.keys().map(String::as_str).collect();
     for locked_name in lockfile.skills.keys() {
-        if !source_names.contains(locked_name.as_str()) {
-            results.push(SkillResult {
-                name: locked_name.clone(),
-                fresh: false,
-                reasons: vec![format!(
-                    "skill '{}' is in lockfile but source directory no longer exists \
-                     — run `skillet build`",
-                    locked_name
-                )],
-                diffs: vec![DiffEntry {
-                    kind: "source_dir_missing".to_string(),
-                    file: None,
-                }],
-            });
+        if !skill_names.contains(locked_name.as_str()) {
+            skills.push(orphan(
+                format!(
+                    "skill '{locked_name}' is in lockfile but source directory no longer exists \
+                     — run `skillet build`"
+                ),
+                locked_name,
+                "source_dir_missing",
+            ));
+        }
+    }
+    for locked_name in lockfile.agents.keys() {
+        if !ws.agents.contains_key(locked_name) {
+            agents.push(orphan(
+                format!(
+                    "agent '{locked_name}' is in lockfile but its source no longer exists \
+                     — run `skillet build`"
+                ),
+                locked_name,
+                "source_missing",
+            ));
         }
     }
 
-    results.sort_by(|a, b| a.name.cmp(&b.name));
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    agents.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let all_fresh = results.iter().all(|r| r.fresh);
+    let fresh = skills.iter().chain(&agents).all(|r| r.fresh);
     CheckReport {
-        fresh: all_fresh,
-        skills: results,
+        fresh,
+        skills,
+        agents,
+    }
+}
+
+fn orphan(reason: String, name: &str, kind: &str) -> ArtefactResult {
+    ArtefactResult {
+        name: name.to_string(),
+        fresh: false,
+        reasons: vec![reason],
+        diffs: vec![DiffEntry {
+            kind: kind.to_string(),
+            file: None,
+        }],
+    }
+}
+
+/// Compares one artefact's source and output files against its lockfile entry.
+fn verify_artefact(
+    kind: &str,
+    name: &str,
+    source_path: &Path,
+    outputs: &[Output],
+    entry: Option<&ArtefactEntry>,
+) -> ArtefactResult {
+    let mut reasons: Vec<String> = Vec::new();
+    let mut diffs: Vec<DiffEntry> = Vec::new();
+
+    match entry {
+        None => {
+            reasons.push(format!(
+                "{kind} '{name}' not in lockfile — run `skillet build`"
+            ));
+            diffs.push(DiffEntry {
+                kind: "not_in_lockfile".to_string(),
+                file: None,
+            });
+        }
+        Some(entry) => {
+            match workspace::hash_file(source_path) {
+                Err(e) => reasons.push(format!("could not hash source: {}", e)),
+                Ok(hash) if hash != entry.source_hash => {
+                    let fname = source_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    reasons.push(format!("source '{}' has changed since last build", fname));
+                    diffs.push(DiffEntry {
+                        kind: "source_changed".to_string(),
+                        file: Some(source_path.to_string_lossy().to_string()),
+                    });
+                }
+                Ok(_) => {}
+            }
+
+            for output in outputs {
+                let file = Some(output.path.to_string_lossy().to_string());
+                if !output.path.exists() {
+                    reasons.push(format!("{} is missing — run `skillet build`", output.label));
+                    diffs.push(DiffEntry {
+                        kind: output.missing_kind.to_string(),
+                        file,
+                    });
+                    continue;
+                }
+                match workspace::hash_file(&output.path) {
+                    Err(e) => reasons.push(format!("could not hash {}: {}", output.label, e)),
+                    Ok(hash) if hash != entry.compiled_hash => {
+                        reasons.push(format!(
+                            "{} does not match last build — run `skillet build`",
+                            output.label
+                        ));
+                        diffs.push(DiffEntry {
+                            kind: output.changed_kind.to_string(),
+                            file,
+                        });
+                    }
+                    Ok(_) => {}
+                }
+            }
+        }
+    }
+
+    ArtefactResult {
+        name: name.to_string(),
+        fresh: reasons.is_empty(),
+        reasons,
+        diffs,
     }
 }
