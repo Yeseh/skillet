@@ -7,7 +7,7 @@
 //! - **References** — `.pan` files under `{plugin.src_dir}/{skill}/references/**/*.pan`
 //! - **Agents** — `{name}.agent.pan` files directly under `{plugin.agents_dir}`
 //! - **Fragments** — `.fragment.pan` files under `workspace.fragments_dir` (global)
-//! or `plugin.fragments_dir` (plugin-local)
+//!   or `plugin.fragments_dir` (plugin-local)
 
 /// Skill, Script, and Reference type definitions.
 pub mod skill;

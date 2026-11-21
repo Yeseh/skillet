@@ -1,7 +1,4 @@
 [workspace]
-src_dir = "src/skills"
-out_dir = "skills"
-fragments_dir = "src/skills/_fragments"
 
 [lint]
 max_activation_tokens = 4000
@@ -11,3 +8,9 @@ max_fragment_tokens = 500
 [build]
 tokenizer = "cl100k_base"
 verify_urls = true
+
+[plugin.url-verification]
+src_dir = "src/skills"
+out_dir = "skills"
+fragments_dir = "src/skills/_fragments"
+version = "0.1.0"
