@@ -44,11 +44,15 @@ skillet lint --pedantic
 
 For each `untyped-backtick` diagnostic, rewrite the backtick to the suggested
 typed ref using the table below.  The lint output already tells you which type
-to use (e.g. `looks like a path — consider \``ref`         | `./scripts/deploy.sh`   | `ref::./scripts/deploy.sh`  |
+to use (e.g. `looks like a path — consider` `ref::...`):
+
+| Type | Example | Typed ref |
+|---|---|---|
+| `ref`         | `./scripts/deploy.sh`   | `ref::./scripts/deploy.sh`  |
 | `cmd`         | `kubectl apply -f …`    | `cmd::kubectl`              |
 | `skill`       | `diagnose`              | `skill::diagnose`           |
 | `url`         | `https://example.com`   | `url::https://example.com`  |
-| `var`         | repeated project-specific string | extract to [vars]` and use `var::name` |
+| `var`         | repeated project-specific string | extract to [vars] and use `var::name` |
 | `env`         | environment variable name     | `env::VAR_NAME`             |
 
 After each batch of rewrites, re-run lint to confirm the warning count drops:
@@ -113,7 +117,7 @@ two or more skills.  Common candidates:
 Open `skillet.toml` and tune it for the project.  The default file written by
 `skillet init` is a starting point; adjust each section as needed.
 
-**[workspace]`** — workspace-wide settings. The only path it owns is the
+**[workspace]** — workspace-wide settings. The only path it owns is the
 global fragments directory; source and output paths live per-plugin:
 
 ```toml
@@ -121,7 +125,7 @@ global fragments directory; source and output paths live per-plugin:
 fragments_dir = "src/skills/_fragments"
 ```
 
-**[plugin.<name>]`** — each plugin declares its own source/output pair.
+**[plugin.<name>]** — each plugin declares its own source/output pair.
 `skillet init` writes a single `default` plugin; add or rename plugins only if
 the project ships more than one source/output tree:
 
@@ -132,7 +136,7 @@ out_dir = "skills"
 version = "0.1.0"
 ```
 
-**[vars]`** — promote any project-specific string that appears in multiple
+**[vars]** — promote any project-specific string that appears in multiple
 skills to a named variable, then reference it with `var::name`:
 
 ```toml
@@ -141,7 +145,7 @@ project_name = "my-project"
 repo_url     = "https://github.com/org/repo"
 ```
 
-**[env]`** — declare environment variables that skills reference, with
+**[env]** — declare environment variables that skills reference, with
 sensible defaults so builds work locally without every variable set:
 
 ```toml
@@ -150,7 +154,7 @@ CI        = { default = "false" }
 TEAM_NAME = { default = "engineering" }
 ```
 
-**[lint]`** — token budgets and rule control.  Add rule IDs to `disable` only
+**[lint]** — token budgets and rule control.  Add rule IDs to `disable` only
 when a rule genuinely does not apply to the project:
 
 ```toml
@@ -169,7 +173,7 @@ regardless of whether it is found on `PATH`:
 allowed_commands = ["docker", "kubectl", "make"]
 ```
 
-**[build]`** — enable URL verification once you are confident all links are
+**[build]** — enable URL verification once you are confident all links are
 reachable; leave it off during the initial migration pass to avoid noise:
 
 ```toml

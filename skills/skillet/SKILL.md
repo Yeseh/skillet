@@ -50,8 +50,8 @@ Inside `.pan` files you can use backtick typed refs to reference external resour
 - `ref::` + name — reference file under `references/` by its path relative to that folder, extension stripped (e.g. `references/api/types.md` → `ref::api/types`); validated at build time
 - `cmd::` + command — shell command (checked on PATH)
 - `skill::` + name — another skill in the workspace
-- `var::` + name — variable from [vars]` in `skillet.toml`
-- `env::` + name — environment variable with default from [env]`
+- `var::` + name — variable from [vars] in `skillet.toml`
+- `env::` + name — environment variable with default from [env]
 
 ## Fragments
 
