@@ -1,0 +1,16 @@
+name: skillet
+version: 1.0.0
+description: APM project for skillet
+author: Jesse Wellenberg
+# Which agent platforms to deploy to.
+# Resolution order: --target flag > this field > 'apm config set target'
+# > auto-detect from filesystem.
+# Accepted values: agent-skills, antigravity, claude, codex, copilot, cursor, gemini, grok-bot, grok-build, hermes, kiro, opencode, windsurf
+targets:
+  - copilot
+dependencies:
+  apm:
+    - yeseh/skills#b433a208
+  mcp: []
+includes: auto
+scripts: {}

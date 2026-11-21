@@ -28,3 +28,17 @@ rustc-ice-*.txt
 
 .worktrees
 .claude/worktrees/
+.claude/rules
+.claude/skills
+.claude/agents
+.claude/hooks
+.agents/skills
+.github/agents
+.github/instructions
+.github/agents
+.github/skills
+.github/hooks
+
+
+# APM dependencies
+apm_modules/
