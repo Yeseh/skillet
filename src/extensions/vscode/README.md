@@ -9,13 +9,16 @@ Syntax highlighting, linting diagnostics, and visual ref badges for `.pan` skill
   - Block includes (`{> fragment-name <}`) highlighted distinctively
   - Typed ref prefixes (`ref::`, `cmd::`, `skill::`, `var::`, `env::`, `agent::`, `path::`, `url::`) recognised as tokens
 - **Linting** — on file save, runs `skillet lint --format json` and shows diagnostics in the Problems panel
-- **Go-to-definition** — Ctrl/Cmd-click (or F12) jumps to the target of `` `skill::` ``, `` `agent::` ``, and `` `ref::` `` refs, and `{> fragment <}` includes
+- **Go to Definition and Rename** — Ctrl/Cmd-click or F12 follows `skill::`,
+  `ref::`, `{> fragment <}`, `agent::`, `var::`, and `env::` references through
+  `skillet lsp`. Press F2 to rename supported skill, ref, fragment, and agent
+  references; VS Code previews and undoes text and disk file/folder changes.
 - **Ref badge decorations** — all typed ref backtick spans are styled with a rounded pill badge
 - **Output channel** — `Skillet` output channel captures errors and debug info (only written on failure)
 
 ## Requirements
 
-- `skillet` CLI installed and available on `$PATH` (or configured via `skillet.executablePath`)
+- `skillet` CLI with the `lsp` subcommand, available on `$PATH` (or configured via `skillet.executablePath`)
 - VS Code 1.85 or later
 
 ## Installation
@@ -57,6 +60,12 @@ Per-workspace override (in `.vscode/settings.json`):
 ```
 
 ## How It Works
+
+Language features use the `skillet lsp` stdio server. The server resolves
+definitions and returns rename edits, including file and folder renames, for
+VS Code to preview and apply. `cmd::` and unresolved refs cannot be renamed.
+
+Linting on save works as follows:
 
 ```
 .pan file saved
