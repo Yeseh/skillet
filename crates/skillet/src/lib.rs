@@ -11,6 +11,7 @@ pub mod freshness;
 pub mod frontmatter;
 pub mod lint;
 pub mod lockfile;
+pub mod navigation;
 pub mod net;
 pub mod refs;
 pub mod tokens;
