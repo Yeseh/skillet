@@ -24,6 +24,8 @@ pub enum OutputFormat {
     #[default]
     Text,
     Json,
+    /// Suppresses all stdout output (used when `publish --format json` invokes a pre-build).
+    Quiet,
 }
 
 /// Options controlling build behaviour.
@@ -150,7 +152,7 @@ pub fn run(
 
     for skill in &targets {
         compile_one_skill(skill, &ws, &mut lockfile)?;
-        if opts.format != OutputFormat::Json {
+        if opts.format == OutputFormat::Text {
             println!("built {}", skill.name);
         }
         skills_built.push(skill.name.clone());
@@ -159,7 +161,7 @@ pub fn run(
     let mut agents_built: Vec<String> = Vec::new();
     for agent in &agent_targets {
         compile_one_agent(agent, &ws, &mut lockfile)?;
-        if opts.format != OutputFormat::Json {
+        if opts.format == OutputFormat::Text {
             println!("built agent {}", agent.name);
         }
         agents_built.push(agent.name.clone());
@@ -175,7 +177,7 @@ pub fn run(
             &lockfile,
             opts.strict,
             &mut warnings,
-            opts.format != OutputFormat::Json,
+            opts.format == OutputFormat::Text,
         )?;
     }
 

@@ -16,6 +16,13 @@ enum FormatArg {
     Json,
 }
 
+/// Distribution target accepted by `skillet publish --target`.
+#[derive(Clone, Copy, ValueEnum)]
+enum PublishTargetArg {
+    Direct,
+    Apm,
+}
+
 #[derive(Parser)]
 #[command(name = "skillet", about = "Skill management CLI")]
 struct Cli {
@@ -101,6 +108,9 @@ enum Commands {
         /// Output format
         #[arg(long)]
         format: Option<FormatArg>,
+        /// Distribution target (`direct` writes plugin.json/marketplace.json; `apm` writes apm.yml)
+        #[arg(long, value_enum, default_value_t = PublishTargetArg::Direct)]
+        target: PublishTargetArg,
     },
     /// Work with bundled skills
     #[command(subcommand_required = true, arg_required_else_help = true)]
@@ -193,18 +203,27 @@ fn main() -> Result<()> {
             };
             budget::run(&cwd, name.as_deref(), plugin.as_deref(), fmt, &cfg)?;
         }
-        Commands::Publish { no_build, format } => {
+        Commands::Publish {
+            no_build,
+            format,
+            target,
+        } => {
             let cwd = std::env::current_dir()?;
             let cfg = skillet::config::SkilletConfig::load(&cwd)?;
             let fmt = match format {
                 Some(FormatArg::Json) => publish::OutputFormat::Json,
                 None => publish::OutputFormat::Text,
             };
+            let publish_target = match target {
+                PublishTargetArg::Direct => publish::PublishTarget::Direct,
+                PublishTargetArg::Apm => publish::PublishTarget::Apm,
+            };
             publish::run(
                 &cwd,
                 &publish::PublishOptions {
                     no_build,
                     format: fmt,
+                    target: publish_target,
                 },
                 &cfg,
             )?;

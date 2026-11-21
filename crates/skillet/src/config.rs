@@ -34,6 +34,100 @@ pub struct PublishConfig {
     pub owner_email: Option<String>,
 }
 
+/// An entry in a plugin's `dependencies` list, emitted into `dependencies.apm`
+/// in the plugin's `apm.yml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ApmDependency {
+    /// String shorthand, clone URL, or local path (APM schema §4.1.1).
+    Shorthand(String),
+    /// Remote Git or monorepo-sibling (`git: "parent"`) dependency object (§4.1.2).
+    Git(GitApmDependency),
+    /// Marketplace-resolved plugin dependency object (§4.1.2).
+    Marketplace(MarketplaceApmDependency),
+    /// Registry-resolved package dependency object (§4.1.2).
+    Registry(RegistryApmDependency),
+    /// Local path dependency object (§4.1.2).
+    Local(LocalApmDependency),
+}
+
+/// Remote Git or monorepo-sibling (`git: "parent"`) APM dependency object.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitApmDependency {
+    /// Git repository URL, shorthand, or `"parent"` for monorepo sibling.
+    pub git: String,
+    /// Optional subdirectory path inside the repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Optional Git ref (tag, branch, or commit SHA).
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+    /// Optional local alias for this dependency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Optional repository type override.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub repo_type: Option<String>,
+    /// Whether to allow insecure transport for this repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_insecure: Option<bool>,
+    /// Optional subset of skills to install from this dependency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    /// Optional agent targets to scope this dependency to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<String>>,
+}
+
+/// Local filesystem path APM dependency object.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalApmDependency {
+    /// Local path to the dependency package.
+    pub path: String,
+    /// Optional local alias for this dependency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Optional subset of skills to install from this dependency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    /// Optional agent targets to scope this dependency to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<String>>,
+}
+
+/// Marketplace-resolved plugin APM dependency object.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketplaceApmDependency {
+    /// Plugin name in the marketplace.
+    pub name: String,
+    /// Marketplace identifier.
+    pub marketplace: String,
+    /// Optional version constraint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// Registry-resolved package APM dependency object.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryApmDependency {
+    /// Package identifier in the registry.
+    pub id: String,
+    /// Optional registry name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    /// Optional version constraint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
 /// Per-plugin source/output configuration.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +150,9 @@ pub struct PluginConfig {
     /// Path (relative to workspace root) where `{name}.agent.pan` agent sources live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents_dir: Option<String>,
+    /// External APM skill dependencies emitted into `dependencies.apm` in `apm.yml`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<ApmDependency>,
 }
 
 /// Linting rules applied during `skillet lint`.
@@ -130,6 +227,7 @@ impl Default for SkilletConfig {
                 description: None,
                 publish: false,
                 agents_dir: None,
+                dependencies: Vec::new(),
             },
         );
 
@@ -262,6 +360,108 @@ fragments_dir = "plugin/src/_fragments"
         assert_eq!(
             extras.fragments_dir.as_deref(),
             Some("plugin/src/_fragments")
+        );
+        assert!(extras.dependencies.is_empty());
+    }
+
+    #[test]
+    fn parse_plugin_dependencies_all_forms() {
+        let toml_str = r#"
+[workspace]
+
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens = 100
+max_fragment_tokens = 500
+
+[build]
+tokenizer = "cl100k_base"
+
+[plugin.core]
+src_dir = "src/skills"
+out_dir = "skills"
+version = "1.0.0"
+dependencies = [
+  "microsoft/apm-sample-package#v1.0.0",
+  { git = "https://gitlab.com/acme/repo.git", path = "instructions/security", ref = "v2.0", alias = "acme-sec", type = "git", allow_insecure = false, skills = ["sec"], targets = ["claude"] },
+  { path = "./packages/shared", alias = "shared", skills = ["lint"], targets = ["copilot"] },
+  { name = "code-review", marketplace = "contoso", version = "^1.0.0" },
+  { id = "acme/prompts", registry = "internal", version = "1.2.3" },
+]
+"#;
+        let cfg: SkilletConfig = toml::from_str(toml_str).unwrap();
+        let deps = &cfg.plugins["core"].dependencies;
+        assert_eq!(deps.len(), 5);
+
+        assert_eq!(
+            deps[0],
+            ApmDependency::Shorthand("microsoft/apm-sample-package#v1.0.0".to_string())
+        );
+        assert_eq!(
+            deps[1],
+            ApmDependency::Git(GitApmDependency {
+                git: "https://gitlab.com/acme/repo.git".to_string(),
+                path: Some("instructions/security".to_string()),
+                git_ref: Some("v2.0".to_string()),
+                alias: Some("acme-sec".to_string()),
+                repo_type: Some("git".to_string()),
+                allow_insecure: Some(false),
+                skills: Some(vec!["sec".to_string()]),
+                targets: Some(vec!["claude".to_string()]),
+            })
+        );
+        assert_eq!(
+            deps[2],
+            ApmDependency::Local(LocalApmDependency {
+                path: "./packages/shared".to_string(),
+                alias: Some("shared".to_string()),
+                skills: Some(vec!["lint".to_string()]),
+                targets: Some(vec!["copilot".to_string()]),
+            })
+        );
+        assert_eq!(
+            deps[3],
+            ApmDependency::Marketplace(MarketplaceApmDependency {
+                name: "code-review".to_string(),
+                marketplace: "contoso".to_string(),
+                version: Some("^1.0.0".to_string()),
+            })
+        );
+        assert_eq!(
+            deps[4],
+            ApmDependency::Registry(RegistryApmDependency {
+                id: "acme/prompts".to_string(),
+                registry: Some("internal".to_string()),
+                version: Some("1.2.3".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_plugin_dependencies_rejects_unknown_fields() {
+        let toml_str = r#"
+[workspace]
+
+[lint]
+max_activation_tokens = 4000
+max_discovery_tokens = 100
+max_fragment_tokens = 500
+
+[build]
+tokenizer = "cl100k_base"
+
+[plugin.core]
+src_dir = "src/skills"
+out_dir = "skills"
+version = "1.0.0"
+dependencies = [
+  { git = "owner/repo", bogus_field = true },
+]
+"#;
+        let err = toml::from_str::<SkilletConfig>(toml_str).unwrap_err();
+        assert!(
+            err.to_string().contains("dependencies"),
+            "unexpected error: {err}"
         );
     }
 }
