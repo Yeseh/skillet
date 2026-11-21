@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { LanguageClient, TransportKind } from "vscode-languageclient/node";
+import { LanguageClient } from "vscode-languageclient/node";
 import type {
   LanguageClientOptions,
   ServerOptions,
@@ -355,12 +355,15 @@ function warnCliMissing(exe: string): void {
 }
 
 function startLanguageClient(context: vscode.ExtensionContext): void {
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const activeDocument = vscode.window.activeTextEditor?.document;
+  const workspaceRoot =
+    (activeDocument && findWorkspaceRoot(activeDocument.uri.fsPath)) ??
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const exe = executablePath(workspaceRoot);
+  // The client defaults to stdio; setting TransportKind.stdio adds `--stdio`.
   const serverOptions: ServerOptions = {
     command: exe,
     args: ["lsp"],
-    transport: TransportKind.stdio,
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "pan" }],
