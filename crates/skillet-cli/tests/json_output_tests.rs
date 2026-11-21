@@ -266,3 +266,62 @@ fn json_mode_stdout_contains_only_json() {
             .unwrap_or_else(|e| panic!("non-JSON stdout for {:?}: {e}\nstdout: {stdout}", args));
     }
 }
+
+// ── budget transitive tokens ──────────────────────────────────────────────────
+
+fn budget_json_row(tmp: &TempDir, skill: &str) -> serde_json::Value {
+    let out = common::run_skillet(tmp.path(), &["budget", "--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["skill"] == skill)
+        .cloned()
+        .unwrap_or_else(|| panic!("no budget row for {skill}"))
+}
+
+#[test]
+fn budget_json_transitive_includes_reference_files() {
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    let refs_dir = tmp.path().join("src/skills/my-skill/references");
+    std::fs::create_dir_all(&refs_dir).unwrap();
+    std::fs::write(
+        refs_dir.join("guide.md"),
+        "# Guide\n\nA reference file with several words of content in it.\n",
+    )
+    .unwrap();
+
+    let out = common::run_skillet(tmp.path(), &["build"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let row = budget_json_row(&tmp, "my-skill");
+    let activation = row["activation"].as_u64().unwrap();
+    let transitive = row["transitive"].as_u64().unwrap();
+    assert!(activation > 0, "row: {row}");
+    assert!(transitive > activation, "row: {row}");
+}
+
+#[test]
+fn budget_json_transitive_without_references_is_at_least_activation() {
+    let tmp = setup_workspace_with_skill("my-skill");
+
+    let row = budget_json_row(&tmp, "my-skill");
+    let activation = row["activation"].as_u64().unwrap();
+    let transitive = row["transitive"].as_u64().unwrap();
+    assert!(activation > 0, "row: {row}");
+    assert!(transitive >= activation, "row: {row}");
+}

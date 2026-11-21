@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::frontmatter::parse_frontmatter;
 use crate::lockfile::Lockfile;
 use crate::tokens::count_tokens;
+use crate::workspace::skill::Reference;
 use crate::workspace::{Skill, Workspace};
 
 // ── Data types ──────────────────────────────────────────────────────────────
@@ -80,6 +81,25 @@ pub fn compute_rows(
     Ok(rows)
 }
 
+/// Computes a skill's transitive token cost: its compiled SKILL.md tokens plus
+/// the tokens of every file under its `references/` directory.
+///
+/// Every `.pan`/`.md` file under `references/` is bundled into the built skill,
+/// and `ref::name` directives can only target those files, so the full set of
+/// reference files is the transitive cost — counting `ref::` targets separately
+/// would double-count the ones that are referenced.
+pub fn transitive_tokens(compiled_tokens: u32, references: &[Reference], tokenizer: &str) -> u32 {
+    let references_tokens: u32 = references
+        .iter()
+        .filter_map(|r| {
+            std::fs::read_to_string(&r.absolute_path)
+                .ok()
+                .map(|t| count_tokens(&t, tokenizer))
+        })
+        .sum();
+    compiled_tokens + references_tokens
+}
+
 // ── Per-skill computation ─────────────────────────────────────────────────────
 
 fn compute_row(
@@ -141,21 +161,7 @@ fn compute_row_from_disk(
     };
     let discovery = count_tokens(&discovery_text, tokenizer);
     let compiled_tokens = count_tokens(&compiled, tokenizer);
-
-    // Every `.pan`/`.md` file under `references/` is bundled into the built skill,
-    // and `ref::name` directives can only target those files, so the full set of
-    // reference files is the transitive cost — counting `ref::` targets separately
-    // would double-count the ones that are referenced.
-    let references_tokens: u32 = skill
-        .references
-        .iter()
-        .filter_map(|r| {
-            std::fs::read_to_string(&r.absolute_path)
-                .ok()
-                .map(|t| count_tokens(&t, tokenizer))
-        })
-        .sum();
-    let transitive = compiled_tokens + references_tokens;
+    let transitive = transitive_tokens(compiled_tokens, &skill.references, tokenizer);
 
     let frag_names = lockfile
         .skills
