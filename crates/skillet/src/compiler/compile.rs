@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use crate::workspace::skill::Reference;
 use crate::workspace::Workspace;
 
 use super::{
@@ -46,7 +47,12 @@ pub struct RenderedFragments {
 /// Infallible: assumes [`crate::check::check`] has already run and returned
 /// no errors.  Unresolvable refs fall back gracefully (empty string for
 /// var/env, verbatim backtick for structural refs).
-pub fn compile(ws: &Workspace, source: &PanSource) -> CompileOutput {
+///
+/// `references` supplies the skill's discovered reference files so that a
+/// `ref::name` directive can be rewritten to the reference's path relative to
+/// the skill (e.g. `ref::api/types` → `` `references/api/types.md` ``).  An
+/// unresolved name falls back to emitting the name verbatim.
+pub fn compile(ws: &Workspace, source: &PanSource, references: &[Reference]) -> CompileOutput {
     let raw = source.as_str();
     let body_offset = body_start_offset(raw);
     let body = &raw[body_offset..];
@@ -99,6 +105,16 @@ pub fn compile(ws: &Workspace, source: &PanSource) -> CompileOutput {
                             .unwrap_or_default()
                     });
                     out.push_str(&resolved);
+                }
+                RefKind::Reference => {
+                    let resolved = references
+                        .iter()
+                        .find(|r| r.name == *value)
+                        .map(|r| r.relative_path.as_str())
+                        .unwrap_or(value.as_str());
+                    out.push('`');
+                    out.push_str(resolved);
+                    out.push('`');
                 }
                 _ => {
                     out.push('`');

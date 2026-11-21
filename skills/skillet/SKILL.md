@@ -47,7 +47,7 @@ Skill content here.
 
 Inside `.pan` files you can use backtick typed refs to reference external resources:
 
-- `ref::` + path — file reference (validated at build time)
+- `ref::` + name — reference file under `references/` by its path relative to that folder, extension stripped (e.g. `references/api/types.md` → `ref::api/types`); validated at build time
 - `cmd::` + command — shell command (checked on PATH)
 - `skill::` + name — another skill in the workspace
 - `var::` + name — variable from [vars]` in `skillet.toml`

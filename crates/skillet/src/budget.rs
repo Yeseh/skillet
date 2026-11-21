@@ -10,7 +10,6 @@ use serde::Serialize;
 
 use crate::frontmatter::parse_frontmatter;
 use crate::lockfile::Lockfile;
-use crate::refs::extract_path_refs;
 use crate::tokens::count_tokens;
 use crate::workspace::{Skill, Workspace};
 
@@ -143,17 +142,10 @@ fn compute_row_from_disk(
     let discovery = count_tokens(&discovery_text, tokenizer);
     let compiled_tokens = count_tokens(&compiled, tokenizer);
 
-    let source_text = std::fs::read_to_string(&skill.source_path)
-        .with_context(|| format!("failed to read source '{}'", skill.source_path.display()))?;
-    let ref_tokens: u32 = extract_path_refs(&source_text)
-        .into_iter()
-        .filter_map(|rel| {
-            let path = skill.src_dir.join(&rel);
-            std::fs::read_to_string(&path)
-                .ok()
-                .map(|t| count_tokens(&t, tokenizer))
-        })
-        .sum();
+    // Every `.pan`/`.md` file under `references/` is bundled into the built skill,
+    // and `ref::name` directives can only target those files, so the full set of
+    // reference files is the transitive cost — counting `ref::` targets separately
+    // would double-count the ones that are referenced.
     let references_tokens: u32 = skill
         .references
         .iter()
@@ -163,7 +155,7 @@ fn compute_row_from_disk(
                 .map(|t| count_tokens(&t, tokenizer))
         })
         .sum();
-    let transitive = compiled_tokens + ref_tokens + references_tokens;
+    let transitive = compiled_tokens + references_tokens;
 
     let frag_names = lockfile
         .skills

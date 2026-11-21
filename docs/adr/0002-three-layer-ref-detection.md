@@ -14,7 +14,7 @@ Standard markdown links (`[text](url)` and `[text](path)`) are parsed structural
 
 ### Layer 2: Explicitly annotated refs in backticks
 Authors can annotate refs with a type prefix:
-- `` `ref::./scripts/foo.sh` `` — file path
+- `` `ref::api/types` `` — reference file by name, relative to the skill's `references/` directory with the extension stripped (`references/api/types.{pan,md}`)
 - `` `cmd::git bisect run` `` — CLI command
 - `` `skill::diagnose` `` — workspace skill
 - `` `var::project_name` `` — workspace variable (from `[vars]`)
@@ -33,7 +33,8 @@ Content in single backticks without a prefix is classified by pattern matching:
 Conservative — when in doubt, don't flag. `untyped-backtick` info-level lint suggests adding explicit prefixes.
 
 ### Compiled output behavior:
-- `ref::`, `cmd::`, `skill::` → prefix stripped, backticks preserved
+- `ref::` → resolved to the reference's path relative to the skill (`ref::api/types` → `` `references/api/types.md` ``), backticks preserved
+- `cmd::`, `skill::` → prefix stripped, backticks preserved
 - `var::`, `env::` → fully substituted, no backticks (plain text value)
 
 ## Consequences

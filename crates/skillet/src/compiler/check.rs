@@ -4,13 +4,12 @@
 //! broken fragment references, undeclared vars/env, missing ref paths, and
 //! commands absent from PATH.  Does not write any files.
 
-use std::collections::HashSet;
-
 use crate::compiler::{
     compile::body_start_offset,
     parse::{Node, PanParse, RefKind},
     PanSource,
 };
+use crate::workspace::skill::Reference;
 use crate::workspace::{self, Workspace};
 
 /// Severity of a check diagnostic.
@@ -59,13 +58,16 @@ pub struct CheckDiag {
 
 /// Checks referential integrity of a single `.pan` source file.
 ///
-/// `known_files` is the set of relative paths under the artifact's source
-/// directory used to validate `ref::` targets.  Pass an empty set to skip
-/// that check (e.g. for agents).
+/// `references` is the set of reference files discovered under the skill's
+/// `references/` directory.  A `ref::` directive names a reference by its path
+/// relative to `references/` with the extension stripped (e.g. `ref::api/types`
+/// targets `references/api/types.{pan,md}`); the value is validated against the
+/// `name` of each entry here.  Pass an empty slice for artifacts without
+/// references (e.g. agents) — any `ref::` will then be reported as missing.
 pub fn check_source_file(
     ws: &Workspace,
     source: &PanSource,
-    known_files: &HashSet<String>,
+    references: &[Reference],
 ) -> Vec<CheckDiag> {
     let raw = source.as_str();
     let body_offset = body_start_offset(raw);
@@ -116,7 +118,7 @@ pub fn check_source_file(
                 let col = loc.column;
                 match kind {
                     RefKind::Reference => {
-                        if !known_files.is_empty() && !known_files.contains(value.as_str()) {
+                        if !references.iter().any(|r| r.name == *value) {
                             diags.push(CheckDiag {
                                 kind: CheckKind::PathRef,
                                 severity: Severity::Error,

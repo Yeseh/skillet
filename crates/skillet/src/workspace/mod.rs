@@ -14,7 +14,7 @@ pub mod skill;
 
 pub use skill::Skill;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sha2::Digest;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -355,8 +355,13 @@ fn resolve_references(skill_dir: &Path) -> Result<Vec<Reference>> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let path = e.into_path();
-            if !path.is_file() || path.extension()?.to_str() != Some("pan") {
+            if !path.is_file() {
                 return None;
+            }
+            // References may be `.pan` (compiled) or `.md` (copied verbatim).
+            match path.extension().and_then(|x| x.to_str()) {
+                Some("pan") | Some("md") => {}
+                _ => return None,
             }
             let rel_to_refs = path.strip_prefix(&refs_dir).ok()?;
             let name = rel_to_refs
@@ -377,6 +382,22 @@ fn resolve_references(skill_dir: &Path) -> Result<Vec<Reference>> {
         .collect();
 
     references.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+    // A `ref::name` directive is extension-agnostic, so two files that differ only
+    // by extension (e.g. `api/types.pan` and `api/types.md`) would both answer to
+    // the same `ref::api/types` and the resolution would be ambiguous. Reject it.
+    for pair in references.windows(2) {
+        if pair[0].name == pair[1].name {
+            bail!(
+                "ambiguous reference '{}': both '{}' and '{}' resolve to the same `ref::{}`",
+                pair[0].name,
+                pair[0].relative_path,
+                pair[1].relative_path,
+                pair[0].name
+            );
+        }
+    }
+
     Ok(references)
 }
 

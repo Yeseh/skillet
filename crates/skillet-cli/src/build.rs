@@ -176,9 +176,7 @@ fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> 
 
     let pan_source = PanSource::new(source_content);
 
-    let known_files = ws.get_source_files_for_skill(skill);
-
-    let diags = check_source_file(ws, &pan_source, &known_files);
+    let diags = check_source_file(ws, &pan_source, &skill.references);
 
     for d in &diags {
         eprintln!("{}", render_diag(skill, d));
@@ -188,11 +186,13 @@ fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> 
         anyhow::bail!("check errors in '{}'", skill.name);
     }
 
-    let output = skillet::compiler::compile::compile(ws, &pan_source);
+    let output = skillet::compiler::compile::compile(ws, &pan_source, &skill.references);
 
     std::fs::create_dir_all(&skill.target_dir)?;
     let output_path = skill.target_dir.join("SKILL.md");
     std::fs::write(&output_path, &output.text)?;
+
+    copy_skill_child_files(skill)?;
 
     let source_hash = hash_file(&skill.source_path)?;
     let compiled_hash = hash_bytes(output.text.as_bytes());
@@ -222,6 +222,49 @@ fn compile_one_skill(skill: &Skill, ws: &Workspace, lockfile: &mut Lockfile) -> 
             minhash: old_minhash,
         },
     );
+
+    Ok(())
+}
+
+/// Copies a skill's `references/`, `scripts/`, and `tests/` directories into its
+/// target directory, recursively and 1-to-1, preserving the source structure.
+fn copy_skill_child_files(skill: &Skill) -> Result<()> {
+    for sub in ["references", "scripts", "tests"] {
+        let src_root = skill.src_dir.join(sub);
+        if !src_root.is_dir() {
+            continue;
+        }
+        let dst_root = skill.target_dir.join(sub);
+
+        for entry in walkdir::WalkDir::new(&src_root)
+            .min_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let rel = entry
+                .path()
+                .strip_prefix(&src_root)
+                .expect("walkdir entry is under src_root");
+            let dst = dst_root.join(rel);
+
+            if entry.file_type().is_dir() {
+                std::fs::create_dir_all(&dst)
+                    .with_context(|| format!("failed to create {}", dst.display()))?;
+            } else if entry.file_type().is_file() {
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("failed to create {}", parent.display()))?;
+                }
+                std::fs::copy(entry.path(), &dst).with_context(|| {
+                    format!(
+                        "failed to copy {} to {}",
+                        entry.path().display(),
+                        dst.display()
+                    )
+                })?;
+            }
+        }
+    }
 
     Ok(())
 }

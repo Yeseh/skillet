@@ -10,7 +10,8 @@ use super::{diag, CompiledSkill, Diagnostic, Severity};
 /// Finds reference files that no `ref::` directive in the owning skill points to.
 ///
 /// Usage is determined by scanning `cs.parsed_refs.typed` for `RefKind::Ref`
-/// entries and matching their values against each reference's `relative_path`.
+/// entries and matching their values against each reference's `name` (its path
+/// relative to `references/`, extension stripped).
 pub fn check(compiled: &[CompiledSkill], ws: &Workspace) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
 
@@ -32,7 +33,7 @@ pub fn check(compiled: &[CompiledSkill], ws: &Workspace) -> Vec<Diagnostic> {
             .collect();
 
         for reference in &skill.references {
-            if !used.contains(reference.relative_path.as_str()) {
+            if !used.contains(reference.name.as_str()) {
                 diags.push(diag(
                     Severity::Warning,
                     &cs.name,
@@ -140,7 +141,7 @@ mod tests {
         let ws = make_workspace_with_skill(skill);
         let compiled = make_compiled(
             "diagnose",
-            "---\nname: diagnose\n---\n\nSee `ref::references/api/types.pan`.\n",
+            "---\nname: diagnose\n---\n\nSee `ref::api/types`.\n",
         );
         assert!(check(&[compiled], &ws).is_empty());
     }
@@ -166,7 +167,7 @@ mod tests {
         let ws = make_workspace_with_skill(skill);
         let compiled = make_compiled(
             "diagnose",
-            "---\nname: diagnose\n---\n\nSee `ref::references/api/types.pan`.\n",
+            "---\nname: diagnose\n---\n\nSee `ref::api/types`.\n",
         );
         let diags = check(&[compiled], &ws);
         assert_eq!(diags.len(), 1);

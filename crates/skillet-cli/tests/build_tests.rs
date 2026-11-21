@@ -62,6 +62,45 @@ fn build_name_compiles_only_that_skill() {
 }
 
 #[test]
+fn build_copies_child_files_recursively() {
+    // Arrange
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    let skill_src = tmp.path().join("src/skills/my-skill");
+    fs::create_dir_all(skill_src.join("scripts")).unwrap();
+    fs::create_dir_all(skill_src.join("references/api")).unwrap();
+    fs::create_dir_all(skill_src.join("tests")).unwrap();
+    fs::write(skill_src.join("scripts/setup.sh"), "echo hi\n").unwrap();
+    fs::write(skill_src.join("references/api/types.md"), "# Types\n").unwrap();
+    fs::write(skill_src.join("tests/case.txt"), "expected\n").unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    // Assert
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let target = tmp.path().join("skills/my-skill");
+    assert_eq!(
+        fs::read_to_string(target.join("scripts/setup.sh")).unwrap(),
+        "echo hi\n"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("references/api/types.md")).unwrap(),
+        "# Types\n"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("tests/case.txt")).unwrap(),
+        "expected\n"
+    );
+}
+
+#[test]
 fn build_expands_fragment_includes_in_output() {
     // Arrange
     let tmp = TempDir::new().unwrap();
@@ -206,6 +245,73 @@ fn build_reports_ref_errors_with_source_location() {
             source_path.display()
         )),
         "stderr should place the source path after the error message: {stderr}"
+    );
+}
+
+#[test]
+fn build_resolves_ref_name_to_reference_path() {
+    // Arrange — a `ref::api/types` directive should resolve to the reference
+    // file's path relative to the skill (`references/api/types.md`).
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    let skill_src = tmp.path().join("src/skills/my-skill");
+    fs::create_dir_all(skill_src.join("references/api")).unwrap();
+    fs::write(skill_src.join("references/api/types.md"), "# Types\n").unwrap();
+
+    let source_path = skill_src.join("my-skill.pan");
+    fs::write(
+        &source_path,
+        "---\nname: my-skill\ndescription: \"test\"\n---\n\nSee `ref::api/types`.\n",
+    )
+    .unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    // Assert
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let output = fs::read_to_string(tmp.path().join("skills/my-skill/SKILL.md")).unwrap();
+    assert!(
+        output.contains("`references/api/types.md`"),
+        "expected ref resolved to its skill-relative path, got:\n{output}"
+    );
+    assert!(
+        !output.contains("ref::"),
+        "the `ref::` prefix should be stripped, got:\n{output}"
+    );
+}
+
+#[test]
+fn build_errors_on_ambiguous_reference() {
+    // Arrange — two files differing only by extension both answer to
+    // `ref::types`, which must be rejected as ambiguous.
+    let tmp = TempDir::new().unwrap();
+    common::run_skillet(tmp.path(), &["init"]);
+    common::run_skillet(tmp.path(), &["new", "my-skill"]);
+
+    let refs_dir = tmp.path().join("src/skills/my-skill/references");
+    fs::create_dir_all(&refs_dir).unwrap();
+    fs::write(refs_dir.join("types.md"), "# md\n").unwrap();
+    fs::write(refs_dir.join("types.pan"), "# pan\n").unwrap();
+
+    // Act
+    let out = common::run_skillet(tmp.path(), &["build", "my-skill"]);
+
+    // Assert
+    assert!(
+        !out.status.success(),
+        "build should fail when a ref name is ambiguous"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ambiguous reference"),
+        "stderr should mention the ambiguity: {stderr}"
     );
 }
 

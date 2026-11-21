@@ -61,9 +61,8 @@ fn compile_skill(skill: &Skill, ws: &Workspace) -> CompiledSkill {
     let raw = std::fs::read_to_string(&skill.source_path).unwrap_or_default();
     let source = PanSource::new(raw.clone());
 
-    let known_files = ws.get_source_files_for_skill(skill);
-    let check_diags = check_source_file(ws, &source, &known_files);
-    let output = compile(ws, &source);
+    let check_diags = check_source_file(ws, &source, &skill.references);
+    let output = compile(ws, &source, &skill.references);
     let skill_names: Vec<&str> = ws.skills.keys().map(|s| s.as_str()).collect();
     let parsed_refs = ParsedRefs::extract(&raw, &skill_names);
 
